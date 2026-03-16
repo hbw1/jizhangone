@@ -41,6 +41,9 @@ interface PendingSyncOperationDao {
     @Query("DELETE FROM pending_sync_operations WHERE id = :operationId")
     suspend fun deleteById(operationId: Long)
 
+    @Query("DELETE FROM pending_sync_operations WHERE bookId IN (:bookIds)")
+    suspend fun deleteByBookIds(bookIds: List<Long>)
+
     @Query(
         """
         DELETE FROM pending_sync_operations

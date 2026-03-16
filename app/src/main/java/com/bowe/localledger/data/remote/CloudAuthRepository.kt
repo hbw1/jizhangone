@@ -28,6 +28,11 @@ class CloudAuthRepository(
     private val tokenStore: TokenStore,
     private val remoteDataSource: RemoteLedgerDataSource,
 ) {
+    suspend fun hasSavedSession(): Boolean {
+        val accessToken = tokenStore.accessToken.first()
+        return !accessToken.isNullOrBlank()
+    }
+
     suspend fun restoreSession(): Result<CloudSession?> = runCatching {
         val accessToken = tokenStore.accessToken.first()
         val refreshToken = tokenStore.refreshToken.first()

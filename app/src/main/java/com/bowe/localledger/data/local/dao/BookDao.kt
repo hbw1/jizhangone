@@ -24,6 +24,9 @@ interface BookDao {
     @Query("SELECT * FROM books WHERE remoteId IS NOT NULL AND deletedAt IS NULL ORDER BY createdAt ASC")
     suspend fun getRemoteBooks(): List<BookEntity>
 
+    @Query("DELETE FROM books WHERE remoteId IS NOT NULL")
+    suspend fun deleteRemoteBooks()
+
     @Insert
     suspend fun insert(book: BookEntity): Long
 

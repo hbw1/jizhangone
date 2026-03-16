@@ -18,6 +18,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.BorderStroke
@@ -37,6 +38,7 @@ import com.bowe.localledger.ui.screen.NaturalLanguageEntryScreen
 import com.bowe.localledger.ui.screen.ReportsScreen
 import com.bowe.localledger.ui.screen.SettingsScreen
 import com.bowe.localledger.ui.screen.TransactionsScreen
+import java.time.Instant
 
 private enum class TopLevelDestination(
     val route: String,
@@ -71,6 +73,7 @@ private enum class TopLevelDestination(
 }
 
 private const val CloudAuthRoute = "cloud-auth"
+private const val BootRoute = "boot"
 
 @Composable
 fun LocalLedgerAppRoot() {
@@ -99,12 +102,37 @@ fun LocalLedgerAppRoot() {
     val allCategories by viewModel.allCategories.collectAsStateWithLifecycle()
     val backupJsonPreview by viewModel.backupJsonPreview.collectAsStateWithLifecycle()
     val cloudUiState by viewModel.cloudUiState.collectAsStateWithLifecycle()
+    val startupDestination by viewModel.startupDestination.collectAsStateWithLifecycle()
+    val canGoBackFromCloud = books.isNotEmpty() || cloudUiState.isAuthenticated
+
+    LaunchedEffect(startupDestination, currentRoute) {
+        if (currentRoute != BootRoute) return@LaunchedEffect
+        when (startupDestination) {
+            StartupDestination.APP -> {
+                navController.navigate(TopLevelDestination.Dashboard.route) {
+                    popUpTo(BootRoute) {
+                        inclusive = true
+                    }
+                    launchSingleTop = true
+                }
+            }
+            StartupDestination.AUTH -> {
+                navController.navigate(CloudAuthRoute) {
+                    popUpTo(BootRoute) {
+                        inclusive = true
+                    }
+                    launchSingleTop = true
+                }
+            }
+            StartupDestination.LOADING -> Unit
+        }
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            if (currentRoute != CloudAuthRoute) {
+            if (currentRoute != CloudAuthRoute && currentRoute != BootRoute) {
             Card(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                 shape = RoundedCornerShape(30.dp),
@@ -152,23 +180,28 @@ fun LocalLedgerAppRoot() {
     ) { paddingValues ->
         NavHost(
             navController = navController,
-            startDestination = TopLevelDestination.Dashboard.route,
+            startDestination = BootRoute,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(PaddingValues(bottom = 4.dp)),
         ) {
+            composable(BootRoute) {
+                PaddingValues(bottom = 4.dp)
+                Text("")
+            }
             composable(TopLevelDestination.Dashboard.route) {
                 DashboardScreen(
                     contentPadding = paddingValues,
                     books = books,
                     currentBookId = currentBookId,
                     dashboard = dashboard,
-                    transactions = transactions,
                     addTransactionState = addTransactionState,
                     onBookSelected = viewModel::selectBook,
                     onAddBook = viewModel::addBook,
                     onRenameBook = viewModel::renameCurrentBook,
-                    onAddTransaction = viewModel::addTransaction,
+                    onAddTransaction = { type, amount, memberId, accountId, categoryId, occurredAt, note ->
+                        viewModel.addTransaction(type, amount, memberId, accountId, categoryId, occurredAt, note)
+                    },
                     onOpenNaturalLanguage = { navController.navigate(TopLevelDestination.NaturalLanguage.route) },
                 )
             }
@@ -186,8 +219,12 @@ fun LocalLedgerAppRoot() {
                     contentPadding = paddingValues,
                     transactions = transactions,
                     addTransactionState = addTransactionState,
-                    onAddTransaction = viewModel::addTransaction,
-                    onUpdateTransaction = viewModel::updateTransaction,
+                    onAddTransaction = { type, amount, memberId, accountId, categoryId, occurredAt, note ->
+                        viewModel.addTransaction(type, amount, memberId, accountId, categoryId, occurredAt, note)
+                    },
+                    onUpdateTransaction = { transaction, type, amount, memberId, accountId, categoryId, occurredAt, note ->
+                        viewModel.updateTransaction(transaction, type, amount, memberId, accountId, categoryId, occurredAt, note)
+                    },
                     onDeleteTransaction = viewModel::deleteTransaction,
                 )
             }
@@ -208,10 +245,26 @@ fun LocalLedgerAppRoot() {
                     accounts = accounts,
                     categories = allCategories,
                     backupJsonPreview = backupJsonPreview,
-                    onOpenCloudAuth = { navController.navigate(CloudAuthRoute) },
+                    onOpenCloudAuth = {
+                        navController.navigate(CloudAuthRoute) {
+                            launchSingleTop = true
+                        }
+                    },
                     onRefreshCloud = viewModel::refreshCloudSession,
                     onSyncCloud = viewModel::syncCloudNow,
-                    onLogoutCloud = viewModel::logoutCloud,
+                    onLogoutCloud = { onResult ->
+                        viewModel.logoutCloud { result ->
+                            result.onSuccess {
+                                navController.navigate(CloudAuthRoute) {
+                                    popUpTo(TopLevelDestination.Settings.route) {
+                                        inclusive = true
+                                    }
+                                    launchSingleTop = true
+                                }
+                            }
+                            onResult(result)
+                        }
+                    },
                     onAddMember = viewModel::addMember,
                     onAddAccount = viewModel::addAccount,
                     onAddCategory = viewModel::addCategory,
@@ -231,9 +284,24 @@ fun LocalLedgerAppRoot() {
                 CloudAuthScreen(
                     contentPadding = paddingValues,
                     cloudState = cloudUiState,
+                    canGoBack = canGoBackFromCloud,
                     onBack = { navController.popBackStack() },
                     onClearError = viewModel::clearCloudError,
                     onSaveBaseUrl = viewModel::saveCloudServerBaseUrl,
+                    onEnterApp = {
+                        navController.navigate(TopLevelDestination.Dashboard.route) {
+                            popUpTo(CloudAuthRoute) {
+                                inclusive = true
+                            }
+                            launchSingleTop = true
+                        }
+                    },
+                    onResumeCloud = { onResult ->
+                        viewModel.resumeCloudSession(onResult)
+                    },
+                    onUseLocalMode = { onResult ->
+                        viewModel.enterLocalMode(onResult)
+                    },
                     onLogin = { username, password, onResult ->
                         viewModel.loginToCloud(username, password, onResult)
                     },

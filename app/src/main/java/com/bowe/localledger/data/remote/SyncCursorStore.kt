@@ -22,5 +22,11 @@ class SyncCursorStore(
         }
     }
 
+    suspend fun clearAll() {
+        context.syncDataStore.edit { prefs ->
+            prefs.clear()
+        }
+    }
+
     private fun cursorKey(remoteBookId: String) = stringPreferencesKey("cursor_$remoteBookId")
 }

@@ -53,7 +53,8 @@ class AppViewModel(
     private val selectedBookId = MutableStateFlow<Long?>(null)
     private val backupPreview = MutableStateFlow<String?>(null)
     private val reportPeriod = MutableStateFlow(ReportPeriodState())
-    private val cloudState = MutableStateFlow(CloudUiState(isCheckingSession = true))
+    private val cloudState = MutableStateFlow(CloudUiState())
+    private val startupDestinationState = MutableStateFlow(StartupDestination.LOADING)
 
     val books: StateFlow<List<BookEntity>> = repository.observeBooks()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -138,17 +139,19 @@ class AppViewModel(
 
     val backupJsonPreview: StateFlow<String?> = backupPreview
     val cloudUiState: StateFlow<CloudUiState> = cloudState
+    val startupDestination: StateFlow<StartupDestination> = startupDestinationState
 
     init {
         viewModelScope.launch {
-            repository.ensureSeedData()
-        }
-        viewModelScope.launch {
-            restoreCloudSession()
-        }
-        viewModelScope.launch {
             val baseUrl = remoteLedgerDataSource.currentBaseUrl()
-            cloudState.value = cloudState.value.copy(serverBaseUrl = baseUrl)
+            val hasSavedSession = cloudAuthRepository.hasSavedSession()
+            val hasAnyBooks = repository.hasAnyBooks()
+            cloudState.value = cloudState.value.copy(
+                isCheckingSession = false,
+                serverBaseUrl = baseUrl,
+                hasSavedSession = hasSavedSession,
+            )
+            startupDestinationState.value = if (hasAnyBooks) StartupDestination.APP else StartupDestination.AUTH
         }
     }
 
@@ -179,6 +182,7 @@ class AppViewModel(
         memberId: Long,
         accountId: Long,
         categoryId: Long,
+        occurredAt: Instant,
         note: String,
     ) {
         val bookId = currentBookId.value ?: return
@@ -191,7 +195,7 @@ class AppViewModel(
                     categoryId = categoryId,
                     type = type,
                     amount = amount,
-                    occurredAt = Instant.now(),
+                    occurredAt = occurredAt,
                     note = note.trim(),
                 ),
             )
@@ -206,6 +210,7 @@ class AppViewModel(
         memberId: Long,
         accountId: Long,
         categoryId: Long,
+        occurredAt: Instant,
         note: String,
     ) {
         val bookId = currentBookId.value ?: return
@@ -219,7 +224,7 @@ class AppViewModel(
                     categoryId = categoryId,
                     type = type,
                     amount = amount,
-                    occurredAt = transaction.occurredAt,
+                    occurredAt = occurredAt,
                     note = note.trim(),
                     createdAt = transaction.createdAt,
                 ),
@@ -429,9 +434,11 @@ class AppViewModel(
             cloudState.value = cloudState.value.copy(isSubmitting = true, errorMessage = null)
             val result = cloudAuthRepository.login(username, password)
             result.onSuccess { session ->
-                applyCloudSession(session)
                 viewModelScope.launch {
+                    cloudSyncRepository.clearLocalRemoteData()
+                    applyCloudSession(session)
                     syncCloudBootstrap(session)
+                    startupDestinationState.value = StartupDestination.APP
                 }
                 onResult(Result.success(Unit))
             }.onFailure { error ->
@@ -458,9 +465,11 @@ class AppViewModel(
             cloudState.value = cloudState.value.copy(isSubmitting = true, errorMessage = null)
             val result = cloudAuthRepository.register(username, password, displayName)
             result.onSuccess { session ->
-                applyCloudSession(session)
                 viewModelScope.launch {
+                    cloudSyncRepository.clearLocalRemoteData()
+                    applyCloudSession(session)
                     syncCloudBootstrap(session)
+                    startupDestinationState.value = StartupDestination.APP
                 }
                 onResult(Result.success(Unit))
             }.onFailure { error ->
@@ -503,11 +512,16 @@ class AppViewModel(
         viewModelScope.launch {
             runCatching {
                 cloudAuthRepository.logout()
+                cloudSyncRepository.clearLocalRemoteData()
             }.onSuccess {
                 cloudState.value = CloudUiState(
                     isCheckingSession = false,
                     isAuthenticated = false,
+                    hasSavedSession = false,
+                    serverBaseUrl = cloudState.value.serverBaseUrl,
                 )
+                selectedBookId.value = null
+                startupDestinationState.value = StartupDestination.AUTH
                 onResult(Result.success(Unit))
             }.onFailure { error ->
                 onResult(Result.failure(error))
@@ -517,6 +531,17 @@ class AppViewModel(
 
     fun clearCloudError() {
         cloudState.value = cloudState.value.copy(errorMessage = null)
+    }
+
+    fun resumeCloudSession(onResult: (Result<Unit>) -> Unit = {}) {
+        viewModelScope.launch {
+            restoreCloudSession()
+            if (cloudState.value.isAuthenticated) {
+                onResult(Result.success(Unit))
+            } else {
+                onResult(Result.failure(IllegalStateException(cloudState.value.errorMessage ?: "云端连接失败")))
+            }
+        }
     }
 
     fun saveCloudServerBaseUrl(
@@ -538,16 +563,23 @@ class AppViewModel(
         val result = cloudAuthRepository.restoreSession()
         result.onSuccess { session ->
             if (session == null) {
-                cloudState.value = CloudUiState(isCheckingSession = false)
+                cloudState.value = CloudUiState(
+                    isCheckingSession = false,
+                    hasSavedSession = false,
+                    serverBaseUrl = cloudState.value.serverBaseUrl,
+                )
             } else {
                 applyCloudSession(session)
                 syncCloudBootstrap(session)
             }
         }.onFailure { error ->
+            runCatching { cloudAuthRepository.logout() }
             cloudState.value = CloudUiState(
                 isCheckingSession = false,
                 isAuthenticated = false,
+                hasSavedSession = false,
                 errorMessage = error.message ?: "云端状态恢复失败",
+                serverBaseUrl = cloudState.value.serverBaseUrl,
             )
         }
     }
@@ -560,6 +592,7 @@ class AppViewModel(
             displayName = session.user.displayName,
             username = session.user.username,
             books = session.books,
+            hasSavedSession = true,
             errorMessage = null,
             serverBaseUrl = cloudState.value.serverBaseUrl,
         )
@@ -577,6 +610,24 @@ class AppViewModel(
         if (!cloudState.value.isAuthenticated) return
         syncCloudNow()
     }
+
+    fun enterLocalMode(onResult: (Result<Unit>) -> Unit = {}) {
+        viewModelScope.launch {
+            val result = runCatching {
+                repository.ensureSeedData()
+            }
+            result.onSuccess {
+                startupDestinationState.value = StartupDestination.APP
+            }
+            onResult(result)
+        }
+    }
+}
+
+enum class StartupDestination {
+    LOADING,
+    AUTH,
+    APP,
 }
 
 data class AddTransactionState(
@@ -603,6 +654,7 @@ data class CloudUiState(
     val isSubmitting: Boolean = false,
     val isSyncing: Boolean = false,
     val isAuthenticated: Boolean = false,
+    val hasSavedSession: Boolean = false,
     val displayName: String? = null,
     val username: String? = null,
     val books: List<CloudBook> = emptyList(),

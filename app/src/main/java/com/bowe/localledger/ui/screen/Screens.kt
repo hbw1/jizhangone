@@ -1,12 +1,17 @@
 package com.bowe.localledger.ui.screen
 
+import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import android.content.Context
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,12 +22,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -39,6 +47,8 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -62,6 +72,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.DpSize
 import com.bowe.localledger.data.DashboardData
@@ -80,7 +92,10 @@ import com.bowe.localledger.data.nlp.NaturalLanguageParseResult
 import com.bowe.localledger.data.nlp.ParsedTransactionCandidate
 import com.bowe.localledger.ui.AddTransactionState
 import com.bowe.localledger.ui.CloudUiState
+import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.math.absoluteValue
@@ -91,18 +106,16 @@ fun DashboardScreen(
     books: List<BookEntity>,
     currentBookId: Long?,
     dashboard: DashboardData?,
-    transactions: List<TransactionListItem>,
     addTransactionState: AddTransactionState,
     onBookSelected: (Long) -> Unit,
     onAddBook: (String) -> Unit,
     onRenameBook: (String) -> Unit,
-    onAddTransaction: (TransactionType, Double, Long, Long, Long, String) -> Unit,
+    onAddTransaction: (TransactionType, Double, Long, Long, Long, Instant, String) -> Unit,
     onOpenNaturalLanguage: () -> Unit,
 ) {
     var showBookSheet by rememberSaveable { mutableStateOf(false) }
     var showRenameBookSheet by rememberSaveable { mutableStateOf(false) }
     var showAddSheet by rememberSaveable { mutableStateOf(false) }
-    val recentTransactions = remember(transactions) { transactions.take(4) }
     ScreenContainer(contentPadding = contentPadding) {
         LazyColumn(
             modifier = Modifier
@@ -111,11 +124,12 @@ fun DashboardScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
-                BookSelector(
+                DashboardBookMenu(
                     books = books,
                     currentBookId = currentBookId,
                     onBookSelected = onBookSelected,
                     onAddBook = { showBookSheet = true },
+                    onRenameBook = { showRenameBookSheet = true },
                 )
             }
             item {
@@ -126,28 +140,7 @@ fun DashboardScreen(
                     balance = formatSignedCurrency(dashboard?.balance ?: 0.0),
                     onRecord = { showAddSheet = true },
                     onOpenNaturalLanguage = onOpenNaturalLanguage,
-                    onNewBook = { showBookSheet = true },
-                    onRenameBook = { showRenameBookSheet = true },
                 )
-            }
-            item {
-                QuickInsightsRow(
-                    items = listOf(
-                        "本月收入" to formatCurrency(dashboard?.income ?: 0.0),
-                        "本月支出" to formatCurrency(dashboard?.expense ?: 0.0),
-                        "当前结余" to formatSignedCurrency(dashboard?.balance ?: 0.0),
-                    ),
-                )
-            }
-            item {
-                SectionHeader("最近记录", action = "记一笔", onAction = { showAddSheet = true })
-            }
-            if (recentTransactions.isEmpty()) {
-                item { EmptyCard("暂无记录") }
-            } else {
-                items(recentTransactions, key = { it.id }) { transaction ->
-                    TransactionCard(transaction)
-                }
             }
         }
     }
@@ -167,8 +160,8 @@ fun DashboardScreen(
             state = addTransactionState,
             editingTransaction = null,
             onDismiss = { showAddSheet = false },
-            onConfirm = { type, amount, memberId, accountId, categoryId, note ->
-                onAddTransaction(type, amount, memberId, accountId, categoryId, note)
+            onConfirm = { type, amount, memberId, accountId, categoryId, occurredAt, note ->
+                onAddTransaction(type, amount, memberId, accountId, categoryId, occurredAt, note)
                 showAddSheet = false
             },
         )
@@ -192,8 +185,8 @@ fun TransactionsScreen(
     contentPadding: PaddingValues,
     transactions: List<TransactionListItem>,
     addTransactionState: AddTransactionState,
-    onAddTransaction: (TransactionType, Double, Long, Long, Long, String) -> Unit,
-    onUpdateTransaction: (TransactionListItem, TransactionType, Double, Long, Long, Long, String) -> Unit,
+    onAddTransaction: (TransactionType, Double, Long, Long, Long, Instant, String) -> Unit,
+    onUpdateTransaction: (TransactionListItem, TransactionType, Double, Long, Long, Long, Instant, String) -> Unit,
     onDeleteTransaction: (TransactionListItem) -> Unit,
 ) {
     var showSheet by rememberSaveable { mutableStateOf(false) }
@@ -266,8 +259,8 @@ fun TransactionsScreen(
                 state = addTransactionState,
                 onDismiss = { showSheet = false },
                 editingTransaction = null,
-                onConfirm = { type, amount, memberId, accountId, categoryId, note ->
-                    onAddTransaction(type, amount, memberId, accountId, categoryId, note)
+                onConfirm = { type, amount, memberId, accountId, categoryId, occurredAt, note ->
+                    onAddTransaction(type, amount, memberId, accountId, categoryId, occurredAt, note)
                     showSheet = false
                 },
             )
@@ -277,9 +270,9 @@ fun TransactionsScreen(
                 state = addTransactionState,
                 editingTransaction = editingTransaction,
                 onDismiss = { editingTransaction = null },
-                onConfirm = { type, amount, memberId, accountId, categoryId, note ->
+                onConfirm = { type, amount, memberId, accountId, categoryId, occurredAt, note ->
                     editingTransaction?.let {
-                        onUpdateTransaction(it, type, amount, memberId, accountId, categoryId, note)
+                        onUpdateTransaction(it, type, amount, memberId, accountId, categoryId, occurredAt, note)
                     }
                     editingTransaction = null
                 },
@@ -782,7 +775,7 @@ fun SettingsScreen(
             item {
                 ActionCard(
                     title = "云端同步",
-                    actionText = if (cloudState.isAuthenticated) "查看账号" else "连接云端",
+                    actionText = if (cloudState.isAuthenticated) "查看账号" else "登录 / 注册",
                     onAction = onOpenCloudAuth,
                 ) {
                     when {
@@ -795,7 +788,7 @@ fun SettingsScreen(
                                     modifier = Modifier.width(18.dp),
                                     strokeWidth = 2.dp,
                                 )
-                                Text("正在检查云端连接")
+                                Text("正在继续上次登录")
                             }
                         }
                         cloudState.isAuthenticated -> {
@@ -803,7 +796,6 @@ fun SettingsScreen(
                                 ManageableInfoRow("云端用户", cloudState.displayName ?: cloudState.username.orEmpty())
                                 ManageableInfoRow("登录账号", cloudState.username ?: "-")
                                 ManageableInfoRow("云端账本", "${cloudState.books.size} 本")
-                                ManageableInfoRow("服务器地址", cloudState.serverBaseUrl.ifBlank { "未设置" })
                                 if (cloudState.books.isNotEmpty()) {
                                     Text(
                                         text = cloudState.books.joinToString(" · ") { it.name },
@@ -861,7 +853,7 @@ fun SettingsScreen(
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text("当前仍是本地模式。")
                                 Text(
-                                    text = "连接云端后，可以验证账号并拉取云端账本信息。",
+                                    text = "需要云端账本时，点右上角登录 / 注册即可。",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -1083,9 +1075,13 @@ private fun ManageableInfoRow(label: String, value: String) {
 fun CloudAuthScreen(
     contentPadding: PaddingValues,
     cloudState: CloudUiState,
+    canGoBack: Boolean,
     onBack: () -> Unit,
     onClearError: () -> Unit,
     onSaveBaseUrl: (String, (Result<Unit>) -> Unit) -> Unit,
+    onEnterApp: () -> Unit,
+    onResumeCloud: ((Result<Unit>) -> Unit) -> Unit,
+    onUseLocalMode: ((Result<Unit>) -> Unit) -> Unit,
     onLogin: (String, String, (Result<Unit>) -> Unit) -> Unit,
     onRegister: (String, String, String, (Result<Unit>) -> Unit) -> Unit,
 ) {
@@ -1095,6 +1091,7 @@ fun CloudAuthScreen(
     var username by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
     var displayName by rememberSaveable { mutableStateOf("") }
+    var showAdvancedSettings by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(cloudState.errorMessage) {
         if (!cloudState.errorMessage.isNullOrBlank()) {
@@ -1110,27 +1107,84 @@ fun CloudAuthScreen(
                 .padding(horizontal = 20.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
-            TextButton(onClick = onBack) {
-                Text("返回")
+            if (canGoBack) {
+                TextButton(onClick = onBack) {
+                    Text("返回")
+                }
             }
             Text(
-                text = "连接云端",
+                text = if (cloudState.isAuthenticated) "云端账号" else "登录云端",
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Black,
             )
             Text(
-                text = if (cloudState.isAuthenticated) "云端账号已连接" else "登录或注册云端账号",
+                text = if (cloudState.isAuthenticated) "当前账号已连接，可查看和同步云端账本" else "登录或注册后，再拉取你的账本",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            if (cloudState.isAuthenticated) {
+            if (cloudState.isCheckingSession && !cloudState.isAuthenticated) {
+                Card(
+                    shape = RoundedCornerShape(28.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.width(22.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Text("正在继续上次登录")
+                    }
+                }
+            } else if (cloudState.hasSavedSession && !cloudState.isAuthenticated) {
+                Card(
+                    shape = RoundedCornerShape(28.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text(
+                            text = "检测到上次云端登录",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = "只有你点确认后才会继续登录。你也可以重新登录、注册，或者先用本地模式。",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Button(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                onResumeCloud { result ->
+                                    result.onSuccess { onEnterApp() }
+                                    result.onFailure { toast(context, it.message ?: "继续连接失败") }
+                                }
+                            },
+                        ) {
+                            Text("继续上次登录")
+                        }
+                    }
+                }
+            } else if (cloudState.isAuthenticated) {
                 HighlightCard(
                     title = cloudState.displayName ?: "已连接",
                     rows = listOf(
                         "账号" to (cloudState.username ?: "-"),
                         "账本" to "${cloudState.books.size} 本",
-                        "服务器" to cloudState.serverBaseUrl,
+                        "连接" to "内置云端地址",
                         "状态" to "已完成 bootstrap 拉取",
                     ),
                 )
@@ -1162,7 +1216,7 @@ fun CloudAuthScreen(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = onBack,
                 ) {
-                    Text("返回设置")
+                    Text("返回应用")
                 }
             } else {
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -1187,23 +1241,53 @@ fun CloudAuthScreen(
                             .padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        OutlinedTextField(
-                            value = baseUrl,
-                            onValueChange = { baseUrl = it },
-                            label = { Text("服务器地址") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
+                        Text(
+                            text = "直接登录或注册即可，不需要额外配置。",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        OutlinedButton(
-                            modifier = Modifier.fillMaxWidth(),
-                            onClick = {
-                                onSaveBaseUrl(baseUrl) { result ->
-                                    result.onSuccess { toast(context, "服务器地址已保存") }
-                                    result.onFailure { toast(context, it.message ?: "保存失败") }
-                                }
-                            },
+                        TextButton(
+                            modifier = Modifier.align(Alignment.End),
+                            onClick = { showAdvancedSettings = !showAdvancedSettings },
                         ) {
-                            Text("保存服务器地址")
+                            Text(if (showAdvancedSettings) "收起高级设置" else "高级设置")
+                        }
+                        if (showAdvancedSettings) {
+                            OutlinedTextField(
+                                value = baseUrl,
+                                onValueChange = { baseUrl = it },
+                                label = { Text("服务器地址") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                OutlinedButton(
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        baseUrl = com.bowe.localledger.data.remote.NetworkConfig.DEFAULT_BASE_URL
+                                        onSaveBaseUrl(baseUrl) { result ->
+                                            result.onSuccess { toast(context, "已恢复默认云端") }
+                                            result.onFailure { toast(context, it.message ?: "恢复失败") }
+                                        }
+                                    },
+                                ) {
+                                    Text("恢复默认")
+                                }
+                                OutlinedButton(
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        onSaveBaseUrl(baseUrl) { result ->
+                                            result.onSuccess { toast(context, "服务器地址已保存") }
+                                            result.onFailure { toast(context, it.message ?: "保存失败") }
+                                        }
+                                    },
+                                ) {
+                                    Text("保存设置")
+                                }
+                            }
                         }
                         if (mode == CloudAuthMode.REGISTER) {
                             OutlinedTextField(
@@ -1227,6 +1311,8 @@ fun CloudAuthScreen(
                             label = { Text("密码") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         )
                         Button(
                             modifier = Modifier.fillMaxWidth(),
@@ -1234,12 +1320,12 @@ fun CloudAuthScreen(
                             onClick = {
                                 if (mode == CloudAuthMode.LOGIN) {
                                     onLogin(username, password) { result ->
-                                        result.onSuccess { onBack() }
+                                        result.onSuccess { onEnterApp() }
                                         result.onFailure { toast(context, it.message ?: "登录失败") }
                                     }
                                 } else {
                                     onRegister(username, password, displayName) { result ->
-                                        result.onSuccess { onBack() }
+                                        result.onSuccess { onEnterApp() }
                                         result.onFailure { toast(context, it.message ?: "注册失败") }
                                     }
                                 }
@@ -1254,6 +1340,20 @@ fun CloudAuthScreen(
                             } else {
                                 Text(if (mode == CloudAuthMode.LOGIN) "登录并拉取账本" else "注册并初始化账本")
                             }
+                        }
+                        OutlinedButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                onUseLocalMode { result ->
+                                    result.onSuccess {
+                                        toast(context, "已进入本地模式")
+                                        onEnterApp()
+                                    }
+                                    result.onFailure { toast(context, it.message ?: "进入本地模式失败") }
+                                }
+                            },
+                        ) {
+                            Text("暂用本地模式")
                         }
                     }
                 }
@@ -1322,18 +1422,26 @@ private fun AddTransactionSheet(
     state: AddTransactionState,
     editingTransaction: TransactionListItem?,
     onDismiss: () -> Unit,
-    onConfirm: (TransactionType, Double, Long, Long, Long, String) -> Unit,
+    onConfirm: (TransactionType, Double, Long, Long, Long, Instant, String) -> Unit,
 ) {
+    val context = LocalContext.current
+    val zoneId = remember { ZoneId.systemDefault() }
+    val initialOccurredAt = editingTransaction?.occurredAt ?: Instant.now()
     var type by rememberSaveable(editingTransaction?.id) { mutableStateOf(editingTransaction?.type ?: TransactionType.EXPENSE) }
     var amountText by rememberSaveable(editingTransaction?.id) { mutableStateOf(editingTransaction?.amount?.toString().orEmpty()) }
     var note by rememberSaveable(editingTransaction?.id) { mutableStateOf(editingTransaction?.note.orEmpty()) }
     var selectedMemberId by rememberSaveable(editingTransaction?.id) { mutableStateOf(editingTransaction?.memberId) }
     var selectedAccountId by rememberSaveable(editingTransaction?.id) { mutableStateOf(editingTransaction?.accountId) }
     var selectedCategoryId by rememberSaveable(editingTransaction?.id) { mutableStateOf(editingTransaction?.categoryId) }
+    var occurredAtEpochMillis by rememberSaveable(editingTransaction?.id) { mutableStateOf(initialOccurredAt.toEpochMilli()) }
+    var occurredAtTouched by rememberSaveable(editingTransaction?.id) { mutableStateOf(editingTransaction != null) }
 
     val categories = state.categoriesFor(type)
     val quickAmounts = if (type == TransactionType.EXPENSE) listOf("20", "50", "100", "200") else listOf("500", "1000", "3000", "5000")
     val quickNotes = if (type == TransactionType.EXPENSE) listOf("午饭", "咖啡", "打车") else listOf("工资", "奖金", "报销")
+    val selectedDateTime = remember(occurredAtEpochMillis) {
+        Instant.ofEpochMilli(occurredAtEpochMillis).atZone(zoneId)
+    }
 
     LaunchedEffect(type, state.members, state.accounts, categories) {
         if (selectedMemberId == null) selectedMemberId = state.recentMemberId ?: state.members.firstOrNull()?.id
@@ -1350,6 +1458,9 @@ private fun AddTransactionSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .navigationBarsPadding()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -1382,6 +1493,46 @@ private fun AddTransactionSheet(
                 title = "快捷金额",
                 values = quickAmounts,
                 onClick = { amountText = it },
+            )
+            DateTimeSelectorRow(
+                dateText = selectedDateTime.toLocalDate().format(DateTimeFormatter.ofPattern("yyyy-MM-dd")),
+                timeText = selectedDateTime.toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm")),
+                onDateClick = {
+                    DatePickerDialog(
+                        context,
+                        { _, year, month, dayOfMonth ->
+                            occurredAtTouched = true
+                            val localDateTime = LocalDateTime.of(
+                                LocalDate.of(year, month + 1, dayOfMonth),
+                                selectedDateTime.toLocalTime(),
+                            )
+                            occurredAtEpochMillis = localDateTime.atZone(zoneId).toInstant().toEpochMilli()
+                        },
+                        selectedDateTime.year,
+                        selectedDateTime.monthValue - 1,
+                        selectedDateTime.dayOfMonth,
+                    ).show()
+                },
+                onTimeClick = {
+                    TimePickerDialog(
+                        context,
+                        { _, hourOfDay, minute ->
+                            occurredAtTouched = true
+                            val localDateTime = LocalDateTime.of(
+                                selectedDateTime.toLocalDate(),
+                                LocalTime.of(hourOfDay, minute),
+                            )
+                            occurredAtEpochMillis = localDateTime.atZone(zoneId).toInstant().toEpochMilli()
+                        },
+                        selectedDateTime.hour,
+                        selectedDateTime.minute,
+                        true,
+                    ).show()
+                },
+                onResetNow = {
+                    occurredAtTouched = true
+                    occurredAtEpochMillis = Instant.now().toEpochMilli()
+                },
             )
             LabeledDropdown(
                 label = "成员",
@@ -1423,7 +1574,7 @@ private fun AddTransactionSheet(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                OutlinedButton(modifier = Modifier.weight(1f), onClick = onDismiss) { Text("取消") }
+                OutlinedButton(modifier = Modifier.weight(1f), onClick = onDismiss) { Text("返回") }
                 Button(
                     modifier = Modifier.weight(1f),
                     onClick = {
@@ -1431,11 +1582,62 @@ private fun AddTransactionSheet(
                         val memberId = selectedMemberId ?: return@Button
                         val accountId = selectedAccountId ?: return@Button
                         val categoryId = selectedCategoryId ?: return@Button
-                        onConfirm(type, amount, memberId, accountId, categoryId, note)
+                        val occurredAt = if (editingTransaction == null && !occurredAtTouched) {
+                            Instant.now()
+                        } else {
+                            Instant.ofEpochMilli(occurredAtEpochMillis)
+                        }
+                        onConfirm(
+                            type,
+                            amount,
+                            memberId,
+                            accountId,
+                            categoryId,
+                            occurredAt,
+                            note,
+                        )
                     },
                 ) {
-                    Text("保存")
+                    Text(if (editingTransaction == null) "确认记账" else "确认修改")
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DateTimeSelectorRow(
+    dateText: String,
+    timeText: String,
+    onDateClick: () -> Unit,
+    onTimeClick: () -> Unit,
+    onResetNow: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = "日期时间",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(
+                modifier = Modifier.weight(1f),
+                onClick = onDateClick,
+            ) {
+                Text(dateText)
+            }
+            OutlinedButton(
+                modifier = Modifier.weight(1f),
+                onClick = onTimeClick,
+            ) {
+                Text(timeText)
+            }
+            TextButton(onClick = onResetNow) {
+                Text("现在")
             }
         }
     }
@@ -1458,6 +1660,9 @@ private fun SimpleInputSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .navigationBarsPadding()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -1517,6 +1722,9 @@ private fun AccountInputSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .navigationBarsPadding()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -1568,6 +1776,9 @@ private fun CategoryInputSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .navigationBarsPadding()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -1684,51 +1895,73 @@ private fun ChipRow(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Suppress("DEPRECATION")
 @Composable
-private fun BookSelector(
+private fun DashboardBookMenu(
     books: List<BookEntity>,
     currentBookId: Long?,
     onBookSelected: (Long) -> Unit,
     onAddBook: () -> Unit,
+    onRenameBook: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val currentBook = books.firstOrNull { it.id == currentBookId } ?: books.firstOrNull()
 
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = !expanded },
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        OutlinedTextField(
-            value = currentBook?.name ?: "",
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("当前账本") },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier
-                .menuAnchor()
-                .fillMaxWidth(),
-        )
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-        ) {
-            books.forEach { book ->
+        Box {
+            IconButton(onClick = { expanded = true }) {
+                Icon(
+                    imageVector = Icons.Outlined.Menu,
+                    contentDescription = "账本菜单",
+                )
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+            ) {
+                books.forEach { book ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                if (book.id == currentBook?.id) "${book.name} · 当前" else book.name,
+                            )
+                        },
+                        onClick = {
+                            onBookSelected(book.id)
+                            expanded = false
+                        },
+                    )
+                }
+                HorizontalDivider()
                 DropdownMenuItem(
-                    text = { Text(book.name) },
+                    text = { Text("新建账本") },
                     onClick = {
-                        onBookSelected(book.id)
                         expanded = false
+                        onAddBook()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("重命名当前账本") },
+                    onClick = {
+                        expanded = false
+                        onRenameBook()
                     },
                 )
             }
-            DropdownMenuItem(
-                text = { Text("新增账本") },
-                onClick = {
-                    expanded = false
-                    onAddBook()
-                },
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                text = "个人账本",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = currentBook?.name ?: "未选择账本",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Black,
             )
         }
     }
@@ -1819,8 +2052,6 @@ private fun HeroDashboardCard(
     balance: String,
     onRecord: () -> Unit,
     onOpenNaturalLanguage: () -> Unit,
-    onNewBook: () -> Unit,
-    onRenameBook: () -> Unit,
 ) {
     Card(
         shape = RoundedCornerShape(32.dp),
@@ -1845,7 +2076,7 @@ private fun HeroDashboardCard(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 Text(
-                    text = bookName,
+                    text = "$bookName · 本月",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f),
                 )
@@ -1895,27 +2126,6 @@ private fun HeroDashboardCard(
                         modifier = Modifier.weight(1f),
                         label = "支出",
                         value = expense,
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    AssistChip(
-                        onClick = onNewBook,
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.14f),
-                            labelColor = MaterialTheme.colorScheme.onPrimary,
-                        ),
-                        label = { Text("新建账本") },
-                    )
-                    AssistChip(
-                        onClick = onRenameBook,
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.14f),
-                            labelColor = MaterialTheme.colorScheme.onPrimary,
-                        ),
-                        label = { Text("改名") },
                     )
                 }
             }

@@ -26,6 +26,8 @@ import java.util.UUID
 class LedgerRepository(
     private val database: AppDatabase,
 ) {
+    suspend fun hasAnyBooks(): Boolean = database.bookDao().count() > 0
+
     fun observeBooks(): Flow<List<BookEntity>> = database.bookDao().observeAll()
 
     fun observeMembers(bookId: Long): Flow<List<MemberEntity>> =
@@ -156,7 +158,8 @@ class LedgerRepository(
             CategoryEntity(bookId = bookId, type = TransactionType.INCOME, name = "奖金", sortOrder = 2),
         )
 
-        val today = LocalDate.now()
+        val zoneId = ZoneId.systemDefault()
+        val today = LocalDate.now(zoneId)
         val sampleTransactions = listOf(
             TransactionEntity(
                 bookId = bookId,
@@ -165,7 +168,7 @@ class LedgerRepository(
                 categoryId = foodId,
                 type = TransactionType.EXPENSE,
                 amount = 86.0,
-                occurredAt = today.atTime(9, 0).toInstant(ZoneOffset.UTC),
+                occurredAt = today.atTime(9, 0).atZone(zoneId).toInstant(),
                 note = "买菜",
                 createdAt = now,
                 updatedAt = now,
@@ -177,7 +180,7 @@ class LedgerRepository(
                 categoryId = salaryId,
                 type = TransactionType.INCOME,
                 amount = 12000.0,
-                occurredAt = today.minusDays(2).atTime(10, 0).toInstant(ZoneOffset.UTC),
+                occurredAt = today.minusDays(2).atTime(10, 0).atZone(zoneId).toInstant(),
                 note = "工资到账",
                 createdAt = now,
                 updatedAt = now,
@@ -189,7 +192,7 @@ class LedgerRepository(
                 categoryId = transportId,
                 type = TransactionType.EXPENSE,
                 amount = 24.5,
-                occurredAt = today.minusDays(1).atTime(18, 0).toInstant(ZoneOffset.UTC),
+                occurredAt = today.minusDays(1).atTime(18, 0).atZone(zoneId).toInstant(),
                 note = "打车",
                 createdAt = now,
                 updatedAt = now,
@@ -201,7 +204,7 @@ class LedgerRepository(
                 categoryId = homeId,
                 type = TransactionType.EXPENSE,
                 amount = 280.0,
-                occurredAt = today.minusDays(3).atTime(15, 30).toInstant(ZoneOffset.UTC),
+                occurredAt = today.minusDays(3).atTime(15, 30).atZone(zoneId).toInstant(),
                 note = "家庭用品",
                 createdAt = now,
                 updatedAt = now,
@@ -213,7 +216,7 @@ class LedgerRepository(
                 categoryId = bonusId,
                 type = TransactionType.INCOME,
                 amount = 3200.0,
-                occurredAt = today.minusDays(5).atTime(12, 0).toInstant(ZoneOffset.UTC),
+                occurredAt = today.minusDays(5).atTime(12, 0).atZone(zoneId).toInstant(),
                 note = "绩效奖金",
                 createdAt = now,
                 updatedAt = now,

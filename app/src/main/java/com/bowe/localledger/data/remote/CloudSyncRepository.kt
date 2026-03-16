@@ -39,6 +39,18 @@ class CloudSyncRepository(
     private val cursorStore: SyncCursorStore,
     private val remoteDataSource: RemoteLedgerDataSource,
 ) {
+    suspend fun clearLocalRemoteData() {
+        val remoteBooks = database.bookDao().getRemoteBooks()
+        val remoteBookIds = remoteBooks.map { it.id }
+        database.withTransaction {
+            if (remoteBookIds.isNotEmpty()) {
+                database.pendingSyncOperationDao().deleteByBookIds(remoteBookIds)
+            }
+            database.bookDao().deleteRemoteBooks()
+        }
+        cursorStore.clearAll()
+    }
+
     suspend fun bootstrapBooks(cloudBooks: List<CloudBook>): List<Long> = database.withTransaction {
         cloudBooks.map { cloudBook ->
             val existing = database.bookDao().getByRemoteId(cloudBook.id)
