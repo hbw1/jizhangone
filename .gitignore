@@ -1,0 +1,10 @@
+.DS_Store
+.gradle/
+build/
+app/build/
+local.properties
+backend/.env
+backend/.venv/
+backend/__pycache__/
+backend/.pytest_cache/
+backend/.mypy_cache/
