@@ -32,6 +32,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.bowe.localledger.LocalLedgerApp
 import com.bowe.localledger.ui.screen.DashboardScreen
+import com.bowe.localledger.ui.screen.CloudAuthScreen
 import com.bowe.localledger.ui.screen.NaturalLanguageEntryScreen
 import com.bowe.localledger.ui.screen.ReportsScreen
 import com.bowe.localledger.ui.screen.SettingsScreen
@@ -69,10 +70,19 @@ private enum class TopLevelDestination(
     ),
 }
 
+private const val CloudAuthRoute = "cloud-auth"
+
 @Composable
 fun LocalLedgerAppRoot() {
     val app = androidx.compose.ui.platform.LocalContext.current.applicationContext as LocalLedgerApp
-    val viewModel: AppViewModel = viewModel(factory = AppViewModelFactory(app.repository))
+    val viewModel: AppViewModel = viewModel(
+        factory = AppViewModelFactory(
+            repository = app.repository,
+            cloudAuthRepository = app.cloudAuthRepository,
+            cloudSyncRepository = app.cloudSyncRepository,
+            remoteLedgerDataSource = app.remoteDataSource,
+        ),
+    )
     val navController = rememberNavController()
     val backStackEntry = navController.currentBackStackEntryAsState().value
     val currentRoute = backStackEntry?.destination?.route
@@ -88,11 +98,13 @@ fun LocalLedgerAppRoot() {
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val allCategories by viewModel.allCategories.collectAsStateWithLifecycle()
     val backupJsonPreview by viewModel.backupJsonPreview.collectAsStateWithLifecycle()
+    val cloudUiState by viewModel.cloudUiState.collectAsStateWithLifecycle()
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
+            if (currentRoute != CloudAuthRoute) {
             Card(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                 shape = RoundedCornerShape(30.dp),
@@ -134,6 +146,7 @@ fun LocalLedgerAppRoot() {
                         )
                     }
                 }
+            }
             }
         },
     ) { paddingValues ->
@@ -190,10 +203,15 @@ fun LocalLedgerAppRoot() {
             composable(TopLevelDestination.Settings.route) {
                 SettingsScreen(
                     contentPadding = paddingValues,
+                    cloudState = cloudUiState,
                     members = members,
                     accounts = accounts,
                     categories = allCategories,
                     backupJsonPreview = backupJsonPreview,
+                    onOpenCloudAuth = { navController.navigate(CloudAuthRoute) },
+                    onRefreshCloud = viewModel::refreshCloudSession,
+                    onSyncCloud = viewModel::syncCloudNow,
+                    onLogoutCloud = viewModel::logoutCloud,
                     onAddMember = viewModel::addMember,
                     onAddAccount = viewModel::addAccount,
                     onAddCategory = viewModel::addCategory,
@@ -207,6 +225,21 @@ fun LocalLedgerAppRoot() {
                     onImportBackupJson = viewModel::importBackupJson,
                     onGenerateBackupPreview = viewModel::generateBackupPreview,
                     onClearBackupPreview = viewModel::clearBackupPreview,
+                )
+            }
+            composable(CloudAuthRoute) {
+                CloudAuthScreen(
+                    contentPadding = paddingValues,
+                    cloudState = cloudUiState,
+                    onBack = { navController.popBackStack() },
+                    onClearError = viewModel::clearCloudError,
+                    onSaveBaseUrl = viewModel::saveCloudServerBaseUrl,
+                    onLogin = { username, password, onResult ->
+                        viewModel.loginToCloud(username, password, onResult)
+                    },
+                    onRegister = { username, password, displayName, onResult ->
+                        viewModel.registerToCloud(username, password, displayName, onResult)
+                    },
                 )
             }
         }

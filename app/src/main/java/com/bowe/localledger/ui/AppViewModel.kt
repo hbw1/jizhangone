@@ -24,6 +24,11 @@ import com.bowe.localledger.data.nlp.NaturalLanguageParseRequest
 import com.bowe.localledger.data.nlp.NaturalLanguageParseResult
 import com.bowe.localledger.data.nlp.ParsedTransactionCandidate
 import com.bowe.localledger.data.nlp.PlaceholderNaturalLanguageLedgerParser
+import com.bowe.localledger.data.remote.CloudAuthRepository
+import com.bowe.localledger.data.remote.CloudBook
+import com.bowe.localledger.data.remote.CloudSession
+import com.bowe.localledger.data.remote.CloudSyncRepository
+import com.bowe.localledger.data.remote.RemoteLedgerDataSource
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -40,11 +45,15 @@ import java.time.LocalDate
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppViewModel(
     private val repository: LedgerRepository,
+    private val cloudAuthRepository: CloudAuthRepository,
+    private val cloudSyncRepository: CloudSyncRepository,
+    private val remoteLedgerDataSource: RemoteLedgerDataSource,
 ) : ViewModel() {
     private val naturalLanguageParser = PlaceholderNaturalLanguageLedgerParser()
     private val selectedBookId = MutableStateFlow<Long?>(null)
     private val backupPreview = MutableStateFlow<String?>(null)
     private val reportPeriod = MutableStateFlow(ReportPeriodState())
+    private val cloudState = MutableStateFlow(CloudUiState(isCheckingSession = true))
 
     val books: StateFlow<List<BookEntity>> = repository.observeBooks()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -128,10 +137,18 @@ class AppViewModel(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AddTransactionState())
 
     val backupJsonPreview: StateFlow<String?> = backupPreview
+    val cloudUiState: StateFlow<CloudUiState> = cloudState
 
     init {
         viewModelScope.launch {
             repository.ensureSeedData()
+        }
+        viewModelScope.launch {
+            restoreCloudSession()
+        }
+        viewModelScope.launch {
+            val baseUrl = remoteLedgerDataSource.currentBaseUrl()
+            cloudState.value = cloudState.value.copy(serverBaseUrl = baseUrl)
         }
     }
 
@@ -178,6 +195,7 @@ class AppViewModel(
                     note = note.trim(),
                 ),
             )
+            triggerCloudSync()
         }
     }
 
@@ -206,12 +224,14 @@ class AppViewModel(
                     createdAt = transaction.createdAt,
                 ),
             )
+            triggerCloudSync()
         }
     }
 
     fun deleteTransaction(transaction: TransactionListItem) {
         viewModelScope.launch {
             repository.deleteTransaction(transaction.id)
+            triggerCloudSync()
         }
     }
 
@@ -246,6 +266,7 @@ class AppViewModel(
                     expenseCategoryNameToId = expenseCategories.value.associate { it.name to it.id },
                     incomeCategoryNameToId = incomeCategories.value.associate { it.name to it.id },
                 )
+                triggerCloudSync()
             }
             onResult(result)
         }
@@ -256,6 +277,7 @@ class AppViewModel(
         if (name.isBlank()) return
         viewModelScope.launch {
             repository.addMember(bookId, name)
+            triggerCloudSync()
         }
     }
 
@@ -264,6 +286,7 @@ class AppViewModel(
         if (name.isBlank()) return
         viewModelScope.launch {
             repository.addAccount(bookId, name, initialBalance)
+            triggerCloudSync()
         }
     }
 
@@ -277,6 +300,7 @@ class AppViewModel(
         }
         viewModelScope.launch {
             repository.addCategory(bookId, type, name, nextSortOrder)
+            triggerCloudSync()
         }
     }
 
@@ -285,6 +309,7 @@ class AppViewModel(
         viewModelScope.launch {
             val newBookId = repository.addBook(name)
             selectedBookId.value = newBookId
+            triggerCloudSync()
         }
     }
 
@@ -293,6 +318,7 @@ class AppViewModel(
         if (name.isBlank()) return
         viewModelScope.launch {
             repository.renameBook(currentBook, name)
+            triggerCloudSync()
         }
     }
 
@@ -349,12 +375,14 @@ class AppViewModel(
         if (name.isBlank()) return
         viewModelScope.launch {
             repository.renameMember(member, name)
+            triggerCloudSync()
         }
     }
 
     fun deactivateMember(member: MemberEntity) {
         viewModelScope.launch {
             repository.deactivateMember(member)
+            triggerCloudSync()
         }
     }
 
@@ -362,12 +390,14 @@ class AppViewModel(
         if (name.isBlank()) return
         viewModelScope.launch {
             repository.renameAccount(account, name)
+            triggerCloudSync()
         }
     }
 
     fun deactivateAccount(account: AccountEntity) {
         viewModelScope.launch {
             repository.deactivateAccount(account)
+            triggerCloudSync()
         }
     }
 
@@ -375,13 +405,177 @@ class AppViewModel(
         if (name.isBlank()) return
         viewModelScope.launch {
             repository.renameCategory(category, name)
+            triggerCloudSync()
         }
     }
 
     fun deactivateCategory(category: CategoryEntity) {
         viewModelScope.launch {
             repository.deactivateCategory(category)
+            triggerCloudSync()
         }
+    }
+
+    fun loginToCloud(
+        username: String,
+        password: String,
+        onResult: (Result<Unit>) -> Unit,
+    ) {
+        if (username.isBlank() || password.isBlank()) {
+            onResult(Result.failure(IllegalArgumentException("请输入账号和密码")))
+            return
+        }
+        viewModelScope.launch {
+            cloudState.value = cloudState.value.copy(isSubmitting = true, errorMessage = null)
+            val result = cloudAuthRepository.login(username, password)
+            result.onSuccess { session ->
+                applyCloudSession(session)
+                viewModelScope.launch {
+                    syncCloudBootstrap(session)
+                }
+                onResult(Result.success(Unit))
+            }.onFailure { error ->
+                cloudState.value = cloudState.value.copy(
+                    isSubmitting = false,
+                    errorMessage = error.message ?: "云端登录失败",
+                )
+                onResult(Result.failure(error))
+            }
+        }
+    }
+
+    fun registerToCloud(
+        username: String,
+        password: String,
+        displayName: String,
+        onResult: (Result<Unit>) -> Unit,
+    ) {
+        if (username.isBlank() || password.isBlank() || displayName.isBlank()) {
+            onResult(Result.failure(IllegalArgumentException("请完整填写注册信息")))
+            return
+        }
+        viewModelScope.launch {
+            cloudState.value = cloudState.value.copy(isSubmitting = true, errorMessage = null)
+            val result = cloudAuthRepository.register(username, password, displayName)
+            result.onSuccess { session ->
+                applyCloudSession(session)
+                viewModelScope.launch {
+                    syncCloudBootstrap(session)
+                }
+                onResult(Result.success(Unit))
+            }.onFailure { error ->
+                cloudState.value = cloudState.value.copy(
+                    isSubmitting = false,
+                    errorMessage = error.message ?: "云端注册失败",
+                )
+                onResult(Result.failure(error))
+            }
+        }
+    }
+
+    fun refreshCloudSession() {
+        viewModelScope.launch {
+            restoreCloudSession()
+        }
+    }
+
+    fun syncCloudNow(onResult: (Result<Unit>) -> Unit = {}) {
+        viewModelScope.launch {
+            cloudState.value = cloudState.value.copy(isSyncing = true, errorMessage = null)
+            val result = cloudSyncRepository.syncAll()
+            result.onSuccess { summary ->
+                cloudState.value = cloudState.value.copy(
+                    isSyncing = false,
+                    lastSyncSummary = "推送 ${summary.pushedOperations} 条，拉取 ${summary.pulledChanges} 条",
+                )
+                onResult(Result.success(Unit))
+            }.onFailure { error ->
+                cloudState.value = cloudState.value.copy(
+                    isSyncing = false,
+                    errorMessage = error.message ?: "同步失败",
+                )
+                onResult(Result.failure(error))
+            }
+        }
+    }
+
+    fun logoutCloud(onResult: (Result<Unit>) -> Unit = {}) {
+        viewModelScope.launch {
+            runCatching {
+                cloudAuthRepository.logout()
+            }.onSuccess {
+                cloudState.value = CloudUiState(
+                    isCheckingSession = false,
+                    isAuthenticated = false,
+                )
+                onResult(Result.success(Unit))
+            }.onFailure { error ->
+                onResult(Result.failure(error))
+            }
+        }
+    }
+
+    fun clearCloudError() {
+        cloudState.value = cloudState.value.copy(errorMessage = null)
+    }
+
+    fun saveCloudServerBaseUrl(
+        baseUrl: String,
+        onResult: (Result<Unit>) -> Unit,
+    ) {
+        viewModelScope.launch {
+            val result = runCatching {
+                remoteLedgerDataSource.updateBaseUrl(baseUrl)
+                val normalized = remoteLedgerDataSource.currentBaseUrl()
+                cloudState.value = cloudState.value.copy(serverBaseUrl = normalized)
+            }
+            onResult(result)
+        }
+    }
+
+    private suspend fun restoreCloudSession() {
+        cloudState.value = cloudState.value.copy(isCheckingSession = true, errorMessage = null)
+        val result = cloudAuthRepository.restoreSession()
+        result.onSuccess { session ->
+            if (session == null) {
+                cloudState.value = CloudUiState(isCheckingSession = false)
+            } else {
+                applyCloudSession(session)
+                syncCloudBootstrap(session)
+            }
+        }.onFailure { error ->
+            cloudState.value = CloudUiState(
+                isCheckingSession = false,
+                isAuthenticated = false,
+                errorMessage = error.message ?: "云端状态恢复失败",
+            )
+        }
+    }
+
+    private fun applyCloudSession(session: CloudSession) {
+        cloudState.value = CloudUiState(
+            isCheckingSession = false,
+            isSubmitting = false,
+            isAuthenticated = true,
+            displayName = session.user.displayName,
+            username = session.user.username,
+            books = session.books,
+            errorMessage = null,
+            serverBaseUrl = cloudState.value.serverBaseUrl,
+        )
+    }
+
+    private suspend fun syncCloudBootstrap(session: CloudSession) {
+        val importedBookIds = cloudSyncRepository.bootstrapBooks(session.books)
+        importedBookIds.firstOrNull()?.let { importedId ->
+            selectedBookId.value = importedId
+        }
+        syncCloudNow()
+    }
+
+    private fun triggerCloudSync() {
+        if (!cloudState.value.isAuthenticated) return
+        syncCloudNow()
     }
 }
 
@@ -404,13 +598,34 @@ data class AddTransactionState(
     }
 }
 
+data class CloudUiState(
+    val isCheckingSession: Boolean = false,
+    val isSubmitting: Boolean = false,
+    val isSyncing: Boolean = false,
+    val isAuthenticated: Boolean = false,
+    val displayName: String? = null,
+    val username: String? = null,
+    val books: List<CloudBook> = emptyList(),
+    val lastSyncSummary: String? = null,
+    val serverBaseUrl: String = "",
+    val errorMessage: String? = null,
+)
+
 class AppViewModelFactory(
     private val repository: LedgerRepository,
+    private val cloudAuthRepository: CloudAuthRepository,
+    private val cloudSyncRepository: CloudSyncRepository,
+    private val remoteLedgerDataSource: RemoteLedgerDataSource,
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(AppViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return AppViewModel(repository) as T
+            return AppViewModel(
+                repository,
+                cloudAuthRepository,
+                cloudSyncRepository,
+                remoteLedgerDataSource,
+            ) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
     }

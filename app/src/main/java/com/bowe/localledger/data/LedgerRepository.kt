@@ -7,6 +7,10 @@ import com.bowe.localledger.data.local.entity.BookEntity
 import com.bowe.localledger.data.local.entity.CategoryEntity
 import com.bowe.localledger.data.local.entity.JournalEntryEntity
 import com.bowe.localledger.data.local.entity.MemberEntity
+import com.bowe.localledger.data.local.entity.PendingSyncOperationEntity
+import com.bowe.localledger.data.local.entity.SyncEntityType
+import com.bowe.localledger.data.local.entity.SyncOperationType
+import com.bowe.localledger.data.local.entity.SyncState
 import com.bowe.localledger.data.local.entity.TransactionEntity
 import com.bowe.localledger.data.local.entity.TransactionType
 import com.bowe.localledger.data.nlp.ParsedTransactionCandidate
@@ -17,6 +21,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZoneOffset
+import java.util.UUID
 
 class LedgerRepository(
     private val database: AppDatabase,
@@ -218,40 +223,82 @@ class LedgerRepository(
     }
 
     suspend fun addTransaction(input: AddTransactionInput) {
-        database.transactionDao().insert(
-            TransactionEntity(
+        database.withTransaction {
+            val transactionId = database.transactionDao().insert(
+                TransactionEntity(
+                    bookId = input.bookId,
+                    memberId = input.memberId,
+                    accountId = input.accountId,
+                    categoryId = input.categoryId,
+                    type = input.type,
+                    amount = input.amount,
+                    occurredAt = input.occurredAt,
+                    note = input.note,
+                ),
+            )
+            queueSyncOperation(
                 bookId = input.bookId,
-                memberId = input.memberId,
-                accountId = input.accountId,
-                categoryId = input.categoryId,
-                type = input.type,
-                amount = input.amount,
-                occurredAt = input.occurredAt,
-                note = input.note,
-            ),
-        )
+                entityType = SyncEntityType.TRANSACTION,
+                entityLocalId = transactionId,
+                operationType = SyncOperationType.UPSERT,
+            )
+        }
     }
 
     suspend fun updateTransaction(input: UpdateTransactionInput) {
-        database.transactionDao().update(
-            TransactionEntity(
-                id = input.id,
+        database.withTransaction {
+            val existing = database.transactionDao().getById(input.id) ?: return@withTransaction
+            database.transactionDao().update(
+                TransactionEntity(
+                    id = input.id,
+                    remoteId = existing.remoteId,
+                    bookId = input.bookId,
+                    memberId = input.memberId,
+                    accountId = input.accountId,
+                    categoryId = input.categoryId,
+                    type = input.type,
+                    amount = input.amount,
+                    occurredAt = input.occurredAt,
+                    note = input.note,
+                    createdAt = input.createdAt,
+                    updatedAt = Instant.now(),
+                    syncState = existing.syncState.markDirty(),
+                    deletedAt = existing.deletedAt,
+                    version = existing.version + 1,
+                ),
+            )
+            queueSyncOperation(
                 bookId = input.bookId,
-                memberId = input.memberId,
-                accountId = input.accountId,
-                categoryId = input.categoryId,
-                type = input.type,
-                amount = input.amount,
-                occurredAt = input.occurredAt,
-                note = input.note,
-                createdAt = input.createdAt,
-                updatedAt = Instant.now(),
-            ),
-        )
+                entityType = SyncEntityType.TRANSACTION,
+                entityLocalId = input.id,
+                operationType = SyncOperationType.UPSERT,
+            )
+        }
     }
 
     suspend fun deleteTransaction(transactionId: Long) {
-        database.transactionDao().deleteById(transactionId)
+        database.withTransaction {
+            val existing = database.transactionDao().getById(transactionId) ?: return@withTransaction
+            if (existing.remoteId == null && existing.syncState == SyncState.LOCAL_ONLY) {
+                database.transactionDao().deleteById(transactionId)
+                database.pendingSyncOperationDao().deleteByEntity(SyncEntityType.TRANSACTION, transactionId)
+            } else {
+                database.transactionDao().update(
+                    existing.copy(
+                        updatedAt = Instant.now(),
+                        syncState = SyncState.DELETED,
+                        deletedAt = Instant.now(),
+                        version = existing.version + 1,
+                    ),
+                )
+                queueSyncOperation(
+                    bookId = existing.bookId,
+                    entityType = SyncEntityType.TRANSACTION,
+                    entityLocalId = transactionId,
+                    operationType = SyncOperationType.DELETE,
+                )
+            }
+        }
     }
 
     suspend fun saveNaturalLanguageEntry(
@@ -265,13 +312,19 @@ class LedgerRepository(
     ) = database.withTransaction {
         val now = Instant.now()
         val entryDate = candidates.firstOrNull()?.occurredOn?.atStartOfDay(ZoneId.systemDefault())?.toInstant() ?: now
-        database.journalEntryDao().insert(
+        val journalId = database.journalEntryDao().insert(
             JournalEntryEntity(
                 bookId = bookId,
                 entryDate = entryDate,
                 rawText = rawText,
                 createdAt = now,
             ),
+        )
+        queueSyncOperation(
+            bookId = bookId,
+            entityType = SyncEntityType.JOURNAL_ENTRY,
+            entityLocalId = journalId,
+            operationType = SyncOperationType.UPSERT,
         )
         candidates.forEach { candidate ->
             val amount = candidate.amount ?: return@forEach
@@ -282,7 +335,7 @@ class LedgerRepository(
             } ?: return@forEach
             val occurredAt = candidate.occurredOn?.atStartOfDay(ZoneId.systemDefault())?.toInstant() ?: now
 
-            database.transactionDao().insert(
+            val transactionId = database.transactionDao().insert(
                 TransactionEntity(
                     bookId = bookId,
                     memberId = memberId,
@@ -296,50 +349,143 @@ class LedgerRepository(
                     updatedAt = now,
                 ),
             )
+            queueSyncOperation(
+                bookId = bookId,
+                entityType = SyncEntityType.TRANSACTION,
+                entityLocalId = transactionId,
+                operationType = SyncOperationType.UPSERT,
+            )
         }
     }
 
     suspend fun addMember(bookId: Long, name: String) {
-        database.memberDao().insert(
+        database.withTransaction {
+            val memberId = database.memberDao().insert(
             MemberEntity(
                 bookId = bookId,
                 name = name.trim(),
             ),
         )
+            queueSyncOperation(
+                bookId = bookId,
+                entityType = SyncEntityType.MEMBER,
+                entityLocalId = memberId,
+                operationType = SyncOperationType.UPSERT,
+            )
+        }
     }
 
     suspend fun renameBook(book: BookEntity, name: String) {
-        database.bookDao().update(book.copy(name = name.trim()))
+        database.withTransaction {
+            database.bookDao().update(
+                book.copy(
+                    name = name.trim(),
+                    syncState = book.syncState.markDirty(),
+                    version = book.version + 1,
+                ),
+            )
+            queueSyncOperation(
+                bookId = book.id,
+                entityType = SyncEntityType.BOOK,
+                entityLocalId = book.id,
+                operationType = SyncOperationType.UPSERT,
+            )
+        }
     }
 
     suspend fun renameMember(member: MemberEntity, name: String) {
-        database.memberDao().update(member.copy(name = name.trim()))
+        database.withTransaction {
+            database.memberDao().update(
+                member.copy(
+                    name = name.trim(),
+                    syncState = member.syncState.markDirty(),
+                    version = member.version + 1,
+                ),
+            )
+            queueSyncOperation(
+                bookId = member.bookId,
+                entityType = SyncEntityType.MEMBER,
+                entityLocalId = member.id,
+                operationType = SyncOperationType.UPSERT,
+            )
+        }
     }
 
     suspend fun deactivateMember(member: MemberEntity) {
-        database.memberDao().update(member.copy(active = false))
+        database.withTransaction {
+            database.memberDao().update(
+                member.copy(
+                    active = false,
+                    syncState = member.syncState.markDirty(),
+                    version = member.version + 1,
+                ),
+            )
+            queueSyncOperation(
+                bookId = member.bookId,
+                entityType = SyncEntityType.MEMBER,
+                entityLocalId = member.id,
+                operationType = SyncOperationType.UPSERT,
+            )
+        }
     }
 
     suspend fun addAccount(bookId: Long, name: String, initialBalance: Double) {
-        database.accountDao().insert(
+        database.withTransaction {
+            val accountId = database.accountDao().insert(
             AccountEntity(
                 bookId = bookId,
                 name = name.trim(),
                 initialBalance = initialBalance,
             ),
         )
+            queueSyncOperation(
+                bookId = bookId,
+                entityType = SyncEntityType.ACCOUNT,
+                entityLocalId = accountId,
+                operationType = SyncOperationType.UPSERT,
+            )
+        }
     }
 
     suspend fun renameAccount(account: AccountEntity, name: String) {
-        database.accountDao().update(account.copy(name = name.trim()))
+        database.withTransaction {
+            database.accountDao().update(
+                account.copy(
+                    name = name.trim(),
+                    syncState = account.syncState.markDirty(),
+                    version = account.version + 1,
+                ),
+            )
+            queueSyncOperation(
+                bookId = account.bookId,
+                entityType = SyncEntityType.ACCOUNT,
+                entityLocalId = account.id,
+                operationType = SyncOperationType.UPSERT,
+            )
+        }
     }
 
     suspend fun deactivateAccount(account: AccountEntity) {
-        database.accountDao().update(account.copy(active = false))
+        database.withTransaction {
+            database.accountDao().update(
+                account.copy(
+                    active = false,
+                    syncState = account.syncState.markDirty(),
+                    version = account.version + 1,
+                ),
+            )
+            queueSyncOperation(
+                bookId = account.bookId,
+                entityType = SyncEntityType.ACCOUNT,
+                entityLocalId = account.id,
+                operationType = SyncOperationType.UPSERT,
+            )
+        }
     }
 
     suspend fun addCategory(bookId: Long, type: TransactionType, name: String, sortOrder: Int) {
-        database.categoryDao().insert(
+        database.withTransaction {
+            val categoryId = database.categoryDao().insert(
             CategoryEntity(
                 bookId = bookId,
                 type = type,
@@ -347,50 +493,97 @@ class LedgerRepository(
                 sortOrder = sortOrder,
             ),
         )
+            queueSyncOperation(
+                bookId = bookId,
+                entityType = SyncEntityType.CATEGORY,
+                entityLocalId = categoryId,
+                operationType = SyncOperationType.UPSERT,
+            )
+        }
     }
 
     suspend fun renameCategory(category: CategoryEntity, name: String) {
-        database.categoryDao().update(category.copy(name = name.trim()))
+        database.withTransaction {
+            database.categoryDao().update(
+                category.copy(
+                    name = name.trim(),
+                    syncState = category.syncState.markDirty(),
+                    version = category.version + 1,
+                ),
+            )
+            queueSyncOperation(
+                bookId = category.bookId,
+                entityType = SyncEntityType.CATEGORY,
+                entityLocalId = category.id,
+                operationType = SyncOperationType.UPSERT,
+            )
+        }
     }
 
     suspend fun deactivateCategory(category: CategoryEntity) {
-        database.categoryDao().update(category.copy(active = false))
+        database.withTransaction {
+            database.categoryDao().update(
+                category.copy(
+                    active = false,
+                    syncState = category.syncState.markDirty(),
+                    version = category.version + 1,
+                ),
+            )
+            queueSyncOperation(
+                bookId = category.bookId,
+                entityType = SyncEntityType.CATEGORY,
+                entityLocalId = category.id,
+                operationType = SyncOperationType.UPSERT,
+            )
+        }
     }
 
     suspend fun addBook(name: String): Long {
-        val now = Instant.now()
-        val bookId = database.bookDao().insert(
-            BookEntity(
-                name = name.trim(),
-                createdAt = now,
-            ),
-        )
-        database.memberDao().insert(MemberEntity(bookId = bookId, name = "我", createdAt = now))
-        database.accountDao().insert(
-            AccountEntity(
+        return database.withTransaction {
+            val now = Instant.now()
+            val bookId = database.bookDao().insert(
+                BookEntity(
+                    name = name.trim(),
+                    createdAt = now,
+                ),
+            )
+            queueSyncOperation(
                 bookId = bookId,
-                name = "现金",
-                initialBalance = 0.0,
-                createdAt = now,
-            ),
-        )
-        database.categoryDao().insert(
-            CategoryEntity(
-                bookId = bookId,
-                type = TransactionType.EXPENSE,
-                name = "餐饮",
-                sortOrder = 1,
-            ),
-        )
-        database.categoryDao().insert(
-            CategoryEntity(
-                bookId = bookId,
-                type = TransactionType.INCOME,
-                name = "工资",
-                sortOrder = 1,
-            ),
-        )
-        return bookId
+                entityType = SyncEntityType.BOOK,
+                entityLocalId = bookId,
+                operationType = SyncOperationType.UPSERT,
+            )
+            val memberId = database.memberDao().insert(MemberEntity(bookId = bookId, name = "我", createdAt = now))
+            queueSyncOperation(bookId, SyncEntityType.MEMBER, memberId, SyncOperationType.UPSERT)
+            val accountId = database.accountDao().insert(
+                AccountEntity(
+                    bookId = bookId,
+                    name = "现金",
+                    initialBalance = 0.0,
+                    createdAt = now,
+                ),
+            )
+            queueSyncOperation(bookId, SyncEntityType.ACCOUNT, accountId, SyncOperationType.UPSERT)
+            val expenseCategoryId = database.categoryDao().insert(
+                CategoryEntity(
+                    bookId = bookId,
+                    type = TransactionType.EXPENSE,
+                    name = "餐饮",
+                    sortOrder = 1,
+                ),
+            )
+            queueSyncOperation(bookId, SyncEntityType.CATEGORY, expenseCategoryId, SyncOperationType.UPSERT)
+            val incomeCategoryId = database.categoryDao().insert(
+                CategoryEntity(
+                    bookId = bookId,
+                    type = TransactionType.INCOME,
+                    name = "工资",
+                    sortOrder = 1,
+                ),
+            )
+            queueSyncOperation(bookId, SyncEntityType.CATEGORY, incomeCategoryId, SyncOperationType.UPSERT)
+            bookId
+        }
     }
 
     suspend fun importBackup(snapshot: BackupSnapshot): Long = database.withTransaction {
@@ -480,6 +673,32 @@ class LedgerRepository(
         }
 
         importedBookId
+    }
+
+    private suspend fun queueSyncOperation(
+        bookId: Long,
+        entityType: SyncEntityType,
+        entityLocalId: Long,
+        operationType: SyncOperationType,
+    ) {
+        val book = database.bookDao().getById(bookId) ?: return
+        if (book.remoteId == null) return
+        database.pendingSyncOperationDao().deleteByEntity(entityType, entityLocalId)
+        database.pendingSyncOperationDao().insert(
+            PendingSyncOperationEntity(
+                bookId = bookId,
+                entityType = entityType,
+                entityLocalId = entityLocalId,
+                operationType = operationType,
+                clientMutationId = UUID.randomUUID().toString(),
+            ),
+        )
+    }
+
+    private fun SyncState.markDirty(): SyncState = when (this) {
+        SyncState.SYNCED -> SyncState.DIRTY
+        SyncState.DELETED -> SyncState.DELETED
+        else -> this
     }
 
     private fun currentMonthRange(): ReportDateRange {

@@ -10,8 +10,14 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface CategoryDao {
-    @Query("SELECT * FROM categories WHERE bookId = :bookId ORDER BY sortOrder ASC, name ASC")
+    @Query("SELECT * FROM categories WHERE bookId = :bookId AND deletedAt IS NULL ORDER BY sortOrder ASC, name ASC")
     fun observeByBook(bookId: Long): Flow<List<CategoryEntity>>
+
+    @Query("SELECT * FROM categories WHERE id = :categoryId LIMIT 1")
+    suspend fun getById(categoryId: Long): CategoryEntity?
+
+    @Query("SELECT * FROM categories WHERE bookId = :bookId AND remoteId = :remoteId LIMIT 1")
+    suspend fun getByRemoteId(bookId: Long, remoteId: String): CategoryEntity?
 
     @Insert
     suspend fun insert(category: CategoryEntity): Long
@@ -22,7 +28,7 @@ interface CategoryDao {
     @Query(
         """
         SELECT * FROM categories
-        WHERE bookId = :bookId AND active = 1 AND type = :type
+        WHERE bookId = :bookId AND active = 1 AND type = :type AND deletedAt IS NULL
         ORDER BY sortOrder ASC, name ASC
         """
     )

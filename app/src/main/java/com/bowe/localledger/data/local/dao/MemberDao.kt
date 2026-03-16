@@ -9,11 +9,17 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface MemberDao {
-    @Query("SELECT * FROM members WHERE bookId = :bookId ORDER BY createdAt DESC")
+    @Query("SELECT * FROM members WHERE bookId = :bookId AND deletedAt IS NULL ORDER BY createdAt DESC")
     fun observeByBook(bookId: Long): Flow<List<MemberEntity>>
 
-    @Query("SELECT * FROM members WHERE bookId = :bookId AND active = 1 ORDER BY createdAt ASC")
+    @Query("SELECT * FROM members WHERE bookId = :bookId AND active = 1 AND deletedAt IS NULL ORDER BY createdAt ASC")
     fun observeActiveByBook(bookId: Long): Flow<List<MemberEntity>>
+
+    @Query("SELECT * FROM members WHERE id = :memberId LIMIT 1")
+    suspend fun getById(memberId: Long): MemberEntity?
+
+    @Query("SELECT * FROM members WHERE bookId = :bookId AND remoteId = :remoteId LIMIT 1")
+    suspend fun getByRemoteId(bookId: Long, remoteId: String): MemberEntity?
 
     @Insert
     suspend fun insert(member: MemberEntity): Long

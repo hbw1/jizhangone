@@ -50,6 +50,7 @@
 - [产品需求文档 PRD](docs/PRD.md)
 - [初始任务拆解](docs/TASKS.md)
 - [联网版完整技术方案](docs/NETWORK_PLAN.md)
+- [腾讯云部署与安全方案](docs/TENCENT_CLOUD_DEPLOY.md)
 - [文档索引](docs/README.md)
 - [后端说明](backend/README.md)
 

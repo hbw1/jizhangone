@@ -10,8 +10,14 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface AccountDao {
-    @Query("SELECT * FROM accounts WHERE bookId = :bookId ORDER BY createdAt DESC")
+    @Query("SELECT * FROM accounts WHERE bookId = :bookId AND deletedAt IS NULL ORDER BY createdAt DESC")
     fun observeByBook(bookId: Long): Flow<List<AccountEntity>>
+
+    @Query("SELECT * FROM accounts WHERE id = :accountId LIMIT 1")
+    suspend fun getById(accountId: Long): AccountEntity?
+
+    @Query("SELECT * FROM accounts WHERE bookId = :bookId AND remoteId = :remoteId LIMIT 1")
+    suspend fun getByRemoteId(bookId: Long, remoteId: String): AccountEntity?
 
     @Insert
     suspend fun insert(account: AccountEntity): Long
@@ -31,8 +37,8 @@ interface AccountDao {
                 END
             ), 0) AS balance
         FROM accounts a
-        LEFT JOIN transactions t ON t.accountId = a.id
-        WHERE a.bookId = :bookId AND a.active = 1
+        LEFT JOIN transactions t ON t.accountId = a.id AND t.deletedAt IS NULL
+        WHERE a.bookId = :bookId AND a.active = 1 AND a.deletedAt IS NULL
         GROUP BY a.id, a.name, a.initialBalance
         ORDER BY balance DESC
         """

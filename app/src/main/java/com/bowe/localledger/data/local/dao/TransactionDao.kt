@@ -34,11 +34,17 @@ interface TransactionDao {
         INNER JOIN categories c ON c.id = t.categoryId
         INNER JOIN members m ON m.id = t.memberId
         INNER JOIN accounts a ON a.id = t.accountId
-        WHERE t.bookId = :bookId
+        WHERE t.bookId = :bookId AND t.deletedAt IS NULL
         ORDER BY t.occurredAt DESC, t.createdAt DESC
         """
     )
     fun observeByBook(bookId: Long): Flow<List<TransactionListRow>>
+
+    @Query("SELECT * FROM transactions WHERE id = :transactionId LIMIT 1")
+    suspend fun getById(transactionId: Long): TransactionEntity?
+
+    @Query("SELECT * FROM transactions WHERE bookId = :bookId AND remoteId = :remoteId LIMIT 1")
+    suspend fun getByRemoteId(bookId: Long, remoteId: String): TransactionEntity?
 
     @Insert
     suspend fun insert(transaction: TransactionEntity): Long
@@ -55,7 +61,7 @@ interface TransactionDao {
             COALESCE(SUM(CASE WHEN type = 'INCOME' THEN amount ELSE 0 END), 0) AS income,
             COALESCE(SUM(CASE WHEN type = 'EXPENSE' THEN amount ELSE 0 END), 0) AS expense
         FROM transactions
-        WHERE bookId = :bookId AND occurredAt >= :startInclusive AND occurredAt < :endExclusive
+        WHERE bookId = :bookId AND deletedAt IS NULL AND occurredAt >= :startInclusive AND occurredAt < :endExclusive
         """
     )
     fun observeMonthSummary(
@@ -72,6 +78,7 @@ interface TransactionDao {
         FROM transactions t
         INNER JOIN categories c ON c.id = t.categoryId
         WHERE t.bookId = :bookId
+            AND t.deletedAt IS NULL
             AND t.type = :type
             AND t.occurredAt >= :startInclusive AND t.occurredAt < :endExclusive
         GROUP BY c.id, c.name
@@ -98,6 +105,7 @@ interface TransactionDao {
         FROM transactions t
         INNER JOIN members m ON m.id = t.memberId
         WHERE t.bookId = :bookId
+            AND t.deletedAt IS NULL
             AND t.occurredAt >= :startInclusive AND t.occurredAt < :endExclusive
         GROUP BY m.id, m.name
         ORDER BY total DESC
@@ -117,6 +125,7 @@ interface TransactionDao {
             COALESCE(SUM(CASE WHEN type = 'EXPENSE' THEN amount ELSE 0 END), 0) AS expense
         FROM transactions
         WHERE bookId = :bookId
+            AND deletedAt IS NULL
             AND occurredAt >= :startInclusive
             AND occurredAt < :endExclusive
         GROUP BY strftime('%Y-%m', occurredAt / 1000, 'unixepoch', 'localtime')
@@ -136,7 +145,7 @@ interface TransactionDao {
             COALESCE(SUM(CASE WHEN type = 'INCOME' THEN amount ELSE 0 END), 0) AS income,
             COALESCE(SUM(CASE WHEN type = 'EXPENSE' THEN amount ELSE 0 END), 0) AS expense
         FROM transactions
-        WHERE bookId = :bookId
+        WHERE bookId = :bookId AND deletedAt IS NULL
         GROUP BY strftime('%Y-%m', occurredAt / 1000, 'unixepoch', 'localtime')
         ORDER BY month DESC
         LIMIT :limit

@@ -30,6 +30,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -43,6 +44,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
@@ -61,6 +63,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.DpSize
 import com.bowe.localledger.data.DashboardData
 import com.bowe.localledger.data.ReportValue
 import com.bowe.localledger.data.ReportPeriodPreset
@@ -76,6 +79,7 @@ import com.bowe.localledger.data.local.entity.TransactionType
 import com.bowe.localledger.data.nlp.NaturalLanguageParseResult
 import com.bowe.localledger.data.nlp.ParsedTransactionCandidate
 import com.bowe.localledger.ui.AddTransactionState
+import com.bowe.localledger.ui.CloudUiState
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -698,10 +702,15 @@ private fun StatsSummaryCard(
 @Composable
 fun SettingsScreen(
     contentPadding: PaddingValues,
+    cloudState: CloudUiState,
     members: List<MemberEntity>,
     accounts: List<AccountEntity>,
     categories: List<CategoryEntity>,
     backupJsonPreview: String?,
+    onOpenCloudAuth: () -> Unit,
+    onRefreshCloud: () -> Unit,
+    onSyncCloud: ((Result<Unit>) -> Unit) -> Unit,
+    onLogoutCloud: ((Result<Unit>) -> Unit) -> Unit,
     onAddMember: (String) -> Unit,
     onAddAccount: (String, Double) -> Unit,
     onAddCategory: (TransactionType, String) -> Unit,
@@ -769,6 +778,104 @@ fun SettingsScreen(
                     fontWeight = FontWeight.Bold,
                 )
                 Text("账本与备份", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            item {
+                ActionCard(
+                    title = "云端同步",
+                    actionText = if (cloudState.isAuthenticated) "查看账号" else "连接云端",
+                    onAction = onOpenCloudAuth,
+                ) {
+                    when {
+                        cloudState.isCheckingSession -> {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.width(18.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Text("正在检查云端连接")
+                            }
+                        }
+                        cloudState.isAuthenticated -> {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                ManageableInfoRow("云端用户", cloudState.displayName ?: cloudState.username.orEmpty())
+                                ManageableInfoRow("登录账号", cloudState.username ?: "-")
+                                ManageableInfoRow("云端账本", "${cloudState.books.size} 本")
+                                ManageableInfoRow("服务器地址", cloudState.serverBaseUrl.ifBlank { "未设置" })
+                                if (cloudState.books.isNotEmpty()) {
+                                    Text(
+                                        text = cloudState.books.joinToString(" · ") { it.name },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Text(
+                                    text = "当前已完成登录、账本拉取和基础推拉同步。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                cloudState.lastSyncSummary?.takeIf { it.isNotBlank() }?.let { summary ->
+                                    Text(
+                                        text = "最近同步：$summary",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(onClick = onRefreshCloud) {
+                                        Text("刷新")
+                                    }
+                                    OutlinedButton(
+                                        enabled = !cloudState.isSyncing,
+                                        onClick = {
+                                            onSyncCloud { result ->
+                                                result.onSuccess { toast(context, "同步完成") }
+                                                result.onFailure { toast(context, it.message ?: "同步失败") }
+                                            }
+                                        },
+                                    ) {
+                                        if (cloudState.isSyncing) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.width(18.dp),
+                                                strokeWidth = 2.dp,
+                                            )
+                                        } else {
+                                            Text("立即同步")
+                                        }
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            onLogoutCloud { result ->
+                                                result.onFailure { toast(context, "退出失败") }
+                                            }
+                                        },
+                                    ) {
+                                        Text("退出")
+                                    }
+                                }
+                            }
+                        }
+                        else -> {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("当前仍是本地模式。")
+                                Text(
+                                    text = "连接云端后，可以验证账号并拉取云端账本信息。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                cloudState.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                                    Text(
+                                        text = message,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
             item {
                 ActionCard(
@@ -954,6 +1061,210 @@ fun SettingsScreen(
             },
         )
     }
+}
+
+@Composable
+private fun ManageableInfoRow(label: String, value: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+@Composable
+fun CloudAuthScreen(
+    contentPadding: PaddingValues,
+    cloudState: CloudUiState,
+    onBack: () -> Unit,
+    onClearError: () -> Unit,
+    onSaveBaseUrl: (String, (Result<Unit>) -> Unit) -> Unit,
+    onLogin: (String, String, (Result<Unit>) -> Unit) -> Unit,
+    onRegister: (String, String, String, (Result<Unit>) -> Unit) -> Unit,
+) {
+    val context = LocalContext.current
+    var mode by rememberSaveable { mutableStateOf(CloudAuthMode.LOGIN) }
+    var baseUrl by rememberSaveable(cloudState.serverBaseUrl) { mutableStateOf(cloudState.serverBaseUrl) }
+    var username by rememberSaveable { mutableStateOf("") }
+    var password by rememberSaveable { mutableStateOf("") }
+    var displayName by rememberSaveable { mutableStateOf("") }
+
+    LaunchedEffect(cloudState.errorMessage) {
+        if (!cloudState.errorMessage.isNullOrBlank()) {
+            toast(context, cloudState.errorMessage)
+            onClearError()
+        }
+    }
+
+    ScreenContainer(contentPadding = contentPadding) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 20.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
+            TextButton(onClick = onBack) {
+                Text("返回")
+            }
+            Text(
+                text = "连接云端",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Black,
+            )
+            Text(
+                text = if (cloudState.isAuthenticated) "云端账号已连接" else "登录或注册云端账号",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            if (cloudState.isAuthenticated) {
+                HighlightCard(
+                    title = cloudState.displayName ?: "已连接",
+                    rows = listOf(
+                        "账号" to (cloudState.username ?: "-"),
+                        "账本" to "${cloudState.books.size} 本",
+                        "服务器" to cloudState.serverBaseUrl,
+                        "状态" to "已完成 bootstrap 拉取",
+                    ),
+                )
+                if (cloudState.books.isNotEmpty()) {
+                    Card(
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text(
+                                text = "云端账本",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            cloudState.books.forEachIndexed { index, book ->
+                                ManageableInfoRow(book.name, "角色 ${book.role}")
+                                if (index != cloudState.books.lastIndex) {
+                                    HorizontalDivider()
+                                }
+                            }
+                        }
+                    }
+                }
+                Button(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = onBack,
+                ) {
+                    Text("返回设置")
+                }
+            } else {
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    CloudAuthMode.entries.forEachIndexed { index, authMode ->
+                        SegmentedButton(
+                            shape = SegmentedButtonDefaults.itemShape(index, CloudAuthMode.entries.size),
+                            selected = authMode == mode,
+                            onClick = { mode = authMode },
+                            label = { Text(authMode.label) },
+                        )
+                    }
+                }
+
+                Card(
+                    shape = RoundedCornerShape(28.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        OutlinedTextField(
+                            value = baseUrl,
+                            onValueChange = { baseUrl = it },
+                            label = { Text("服务器地址") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                        OutlinedButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                onSaveBaseUrl(baseUrl) { result ->
+                                    result.onSuccess { toast(context, "服务器地址已保存") }
+                                    result.onFailure { toast(context, it.message ?: "保存失败") }
+                                }
+                            },
+                        ) {
+                            Text("保存服务器地址")
+                        }
+                        if (mode == CloudAuthMode.REGISTER) {
+                            OutlinedTextField(
+                                value = displayName,
+                                onValueChange = { displayName = it },
+                                label = { Text("昵称") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                            )
+                        }
+                        OutlinedTextField(
+                            value = username,
+                            onValueChange = { username = it },
+                            label = { Text("账号") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                        OutlinedTextField(
+                            value = password,
+                            onValueChange = { password = it },
+                            label = { Text("密码") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                        Button(
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !cloudState.isSubmitting,
+                            onClick = {
+                                if (mode == CloudAuthMode.LOGIN) {
+                                    onLogin(username, password) { result ->
+                                        result.onSuccess { onBack() }
+                                        result.onFailure { toast(context, it.message ?: "登录失败") }
+                                    }
+                                } else {
+                                    onRegister(username, password, displayName) { result ->
+                                        result.onSuccess { onBack() }
+                                        result.onFailure { toast(context, it.message ?: "注册失败") }
+                                    }
+                                }
+                            },
+                        ) {
+                            if (cloudState.isSubmitting) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.width(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                )
+                            } else {
+                                Text(if (mode == CloudAuthMode.LOGIN) "登录并拉取账本" else "注册并初始化账本")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private enum class CloudAuthMode(val label: String) {
+    LOGIN("登录"),
+    REGISTER("注册"),
 }
 
 @Composable

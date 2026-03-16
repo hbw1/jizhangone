@@ -11,11 +11,43 @@ enum class TransactionType {
     EXPENSE,
 }
 
+enum class SyncState {
+    LOCAL_ONLY,
+    DIRTY,
+    SYNCED,
+    DELETED,
+}
+
+enum class SyncEntityType {
+    BOOK,
+    MEMBER,
+    ACCOUNT,
+    CATEGORY,
+    JOURNAL_ENTRY,
+    TRANSACTION,
+}
+
+enum class SyncOperationType {
+    UPSERT,
+    DELETE,
+}
+
+enum class SyncOperationStatus {
+    PENDING,
+    IN_FLIGHT,
+    FAILED,
+    COMPLETED,
+}
+
 @Entity(tableName = "books")
 data class BookEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val remoteId: String? = null,
     val name: String,
     val createdAt: Instant = Instant.now(),
+    val syncState: SyncState = SyncState.LOCAL_ONLY,
+    val deletedAt: Instant? = null,
+    val version: Long = 1,
 )
 
 @Entity(
@@ -32,10 +64,14 @@ data class BookEntity(
 )
 data class JournalEntryEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val remoteId: String? = null,
     val bookId: Long,
     val entryDate: Instant,
     val rawText: String,
     val createdAt: Instant = Instant.now(),
+    val syncState: SyncState = SyncState.LOCAL_ONLY,
+    val deletedAt: Instant? = null,
+    val version: Long = 1,
 )
 
 @Entity(
@@ -52,10 +88,14 @@ data class JournalEntryEntity(
 )
 data class MemberEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val remoteId: String? = null,
     val bookId: Long,
     val name: String,
     val active: Boolean = true,
     val createdAt: Instant = Instant.now(),
+    val syncState: SyncState = SyncState.LOCAL_ONLY,
+    val deletedAt: Instant? = null,
+    val version: Long = 1,
 )
 
 @Entity(
@@ -72,11 +112,15 @@ data class MemberEntity(
 )
 data class AccountEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val remoteId: String? = null,
     val bookId: Long,
     val name: String,
     val initialBalance: Double = 0.0,
     val active: Boolean = true,
     val createdAt: Instant = Instant.now(),
+    val syncState: SyncState = SyncState.LOCAL_ONLY,
+    val deletedAt: Instant? = null,
+    val version: Long = 1,
 )
 
 @Entity(
@@ -93,11 +137,15 @@ data class AccountEntity(
 )
 data class CategoryEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val remoteId: String? = null,
     val bookId: Long,
     val type: TransactionType,
     val name: String,
     val sortOrder: Int = 0,
     val active: Boolean = true,
+    val syncState: SyncState = SyncState.LOCAL_ONLY,
+    val deletedAt: Instant? = null,
+    val version: Long = 1,
 )
 
 @Entity(
@@ -132,6 +180,7 @@ data class CategoryEntity(
 )
 data class TransactionEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val remoteId: String? = null,
     val bookId: Long,
     val memberId: Long,
     val accountId: Long,
@@ -142,4 +191,24 @@ data class TransactionEntity(
     val note: String = "",
     val createdAt: Instant = Instant.now(),
     val updatedAt: Instant = Instant.now(),
+    val syncState: SyncState = SyncState.LOCAL_ONLY,
+    val deletedAt: Instant? = null,
+    val version: Long = 1,
+)
+
+@Entity(
+    tableName = "pending_sync_operations",
+    indices = [Index("bookId"), Index("entityType", "entityLocalId"), Index("status")],
+)
+data class PendingSyncOperationEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val bookId: Long,
+    val entityType: SyncEntityType,
+    val entityLocalId: Long,
+    val operationType: SyncOperationType,
+    val payloadJson: String = "{}",
+    val clientMutationId: String,
+    val status: SyncOperationStatus = SyncOperationStatus.PENDING,
+    val retryCount: Int = 0,
+    val createdAt: Instant = Instant.now(),
 )
