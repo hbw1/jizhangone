@@ -33,7 +33,12 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.bowe.localledger.LocalLedgerApp
 import com.bowe.localledger.ui.screen.DashboardScreen
+import com.bowe.localledger.ui.screen.BackupSettingsScreen
+import com.bowe.localledger.ui.screen.CategoriesSettingsScreen
+import com.bowe.localledger.ui.screen.CloudSyncSettingsScreen
 import com.bowe.localledger.ui.screen.CloudAuthScreen
+import com.bowe.localledger.ui.screen.AccountsSettingsScreen
+import com.bowe.localledger.ui.screen.MembersSettingsScreen
 import com.bowe.localledger.ui.screen.NaturalLanguageEntryScreen
 import com.bowe.localledger.ui.screen.ReportsScreen
 import com.bowe.localledger.ui.screen.SettingsScreen
@@ -74,6 +79,11 @@ private enum class TopLevelDestination(
 
 private const val CloudAuthRoute = "cloud-auth"
 private const val BootRoute = "boot"
+private const val SettingsCloudRoute = "settings/cloud"
+private const val SettingsMembersRoute = "settings/members"
+private const val SettingsAccountsRoute = "settings/accounts"
+private const val SettingsCategoriesRoute = "settings/categories"
+private const val SettingsBackupRoute = "settings/backup"
 
 @Composable
 fun LocalLedgerAppRoot() {
@@ -104,6 +114,10 @@ fun LocalLedgerAppRoot() {
     val cloudUiState by viewModel.cloudUiState.collectAsStateWithLifecycle()
     val startupDestination by viewModel.startupDestination.collectAsStateWithLifecycle()
     val canGoBackFromCloud = books.isNotEmpty() || cloudUiState.isAuthenticated
+    val selectedTopLevelRoute = when {
+        currentRoute?.startsWith(TopLevelDestination.Settings.route) == true -> TopLevelDestination.Settings.route
+        else -> currentRoute
+    }
 
     LaunchedEffect(startupDestination, currentRoute) {
         if (currentRoute != BootRoute) return@LaunchedEffect
@@ -148,7 +162,7 @@ fun LocalLedgerAppRoot() {
                     destinations.forEach { destination ->
                         val isNaturalLanguage = destination == TopLevelDestination.NaturalLanguage
                         NavigationBarItem(
-                            selected = currentRoute == destination.route,
+                            selected = selectedTopLevelRoute == destination.route,
                             onClick = {
                                 navController.navigate(destination.route) {
                                     popUpTo(navController.graph.startDestinationId) {
@@ -210,6 +224,9 @@ fun LocalLedgerAppRoot() {
                     contentPadding = paddingValues,
                     state = addTransactionState,
                     onBack = { navController.navigate(TopLevelDestination.Dashboard.route) },
+                    onAddTransaction = { type, amount, memberId, accountId, categoryId, occurredAt, note ->
+                        viewModel.addTransaction(type, amount, memberId, accountId, categoryId, occurredAt, note)
+                    },
                     onParse = viewModel::parseNaturalLanguage,
                     onSave = viewModel::saveNaturalLanguageEntry,
                 )
@@ -244,7 +261,18 @@ fun LocalLedgerAppRoot() {
                     members = members,
                     accounts = accounts,
                     categories = allCategories,
-                    backupJsonPreview = backupJsonPreview,
+                    onOpenCloudSync = { navController.navigate(SettingsCloudRoute) },
+                    onOpenMembers = { navController.navigate(SettingsMembersRoute) },
+                    onOpenAccounts = { navController.navigate(SettingsAccountsRoute) },
+                    onOpenCategories = { navController.navigate(SettingsCategoriesRoute) },
+                    onOpenBackup = { navController.navigate(SettingsBackupRoute) },
+                )
+            }
+            composable(SettingsCloudRoute) {
+                CloudSyncSettingsScreen(
+                    contentPadding = paddingValues,
+                    cloudState = cloudUiState,
+                    onBack = { navController.popBackStack() },
                     onOpenCloudAuth = {
                         navController.navigate(CloudAuthRoute) {
                             launchSingleTop = true
@@ -256,7 +284,7 @@ fun LocalLedgerAppRoot() {
                         viewModel.logoutCloud { result ->
                             result.onSuccess {
                                 navController.navigate(CloudAuthRoute) {
-                                    popUpTo(TopLevelDestination.Settings.route) {
+                                    popUpTo(SettingsCloudRoute) {
                                         inclusive = true
                                     }
                                     launchSingleTop = true
@@ -265,15 +293,43 @@ fun LocalLedgerAppRoot() {
                             onResult(result)
                         }
                     },
+                )
+            }
+            composable(SettingsMembersRoute) {
+                MembersSettingsScreen(
+                    contentPadding = paddingValues,
+                    members = members,
+                    onBack = { navController.popBackStack() },
                     onAddMember = viewModel::addMember,
-                    onAddAccount = viewModel::addAccount,
-                    onAddCategory = viewModel::addCategory,
                     onRenameMember = viewModel::renameMember,
                     onDeactivateMember = viewModel::deactivateMember,
+                )
+            }
+            composable(SettingsAccountsRoute) {
+                AccountsSettingsScreen(
+                    contentPadding = paddingValues,
+                    accounts = accounts,
+                    onBack = { navController.popBackStack() },
+                    onAddAccount = viewModel::addAccount,
                     onRenameAccount = viewModel::renameAccount,
                     onDeactivateAccount = viewModel::deactivateAccount,
+                )
+            }
+            composable(SettingsCategoriesRoute) {
+                CategoriesSettingsScreen(
+                    contentPadding = paddingValues,
+                    categories = allCategories,
+                    onBack = { navController.popBackStack() },
+                    onAddCategory = viewModel::addCategory,
                     onRenameCategory = viewModel::renameCategory,
                     onDeactivateCategory = viewModel::deactivateCategory,
+                )
+            }
+            composable(SettingsBackupRoute) {
+                BackupSettingsScreen(
+                    contentPadding = paddingValues,
+                    backupJsonPreview = backupJsonPreview,
+                    onBack = { navController.popBackStack() },
                     onBuildBackupJson = viewModel::buildBackupJson,
                     onImportBackupJson = viewModel::importBackupJson,
                     onGenerateBackupPreview = viewModel::generateBackupPreview,

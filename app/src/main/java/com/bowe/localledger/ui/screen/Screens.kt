@@ -318,44 +318,26 @@ fun ReportsScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            brush = Brush.radialGradient(
-                                colors = listOf(
-                                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f),
-                                    MaterialTheme.colorScheme.background.copy(alpha = 0f),
-                                ),
-                                radius = 540f,
-                            ),
-                        ),
+                ReportsHeadline(
+                    periodLabel = periodLabel,
+                    rangeText = rangeText,
                 )
-                {
-                    Column(
-                        modifier = Modifier.padding(top = 8.dp, bottom = 16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(
-                            text = "统计分析",
-                            style = MaterialTheme.typography.headlineMedium,
-                            fontWeight = FontWeight.Black,
-                        )
-                        Text(
-                            text = "$periodLabel 收支看板",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            text = rangeText,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
             }
             item {
-                PeriodFilterRow(
+                ReportHeroCard(
+                    expense = formatCurrency(expense),
+                    income = formatCurrency(income),
+                    balance = balanceText,
+                    periodLabel = periodLabel,
+                    rangeText = rangeText,
+                    ratioText = spendRatioText,
+                    progress = spendRatio.toFloat(),
+                )
+            }
+            item {
+                PeriodFilterCard(
+                    selectedLabel = periodLabel,
+                    rangeText = rangeText,
                     options = periodOptions,
                     selected = periodState.preset,
                     onSelect = { option ->
@@ -368,14 +350,13 @@ fun ReportsScreen(
                 )
             }
             item {
-                StatsOverviewCard(
-                    balance = balanceText,
-                    periodLabel = periodLabel,
-                    ratioText = spendRatioText,
-                    income = formatCurrency(income),
-                    expense = formatCurrency(expense),
-                    progress = spendRatio.toFloat(),
+                ReportSectionHeader(
+                    title = "详细分析",
+                    subtitle = "分类、成员和账户分布",
                 )
+            }
+            item {
+                TrendCard("月度走势", reports?.monthTrend.orEmpty())
             }
             item {
                 Row(
@@ -384,18 +365,15 @@ fun ReportsScreen(
                 ) {
                     StatsSummaryCard(
                         modifier = Modifier.weight(1f),
-                        title = "$periodLabel 收入",
+                        title = "收入",
                         value = formatCurrency(income),
                     )
                     StatsSummaryCard(
                         modifier = Modifier.weight(1f),
-                        title = "$periodLabel 支出",
+                        title = "支出",
                         value = formatCurrency(expense),
                     )
                 }
-            }
-            item {
-                TrendCard("月度走势", reports?.monthTrend.orEmpty())
             }
             item {
                 ReportCard("支出分类", reports?.categoryExpense.orEmpty())
@@ -422,7 +400,50 @@ fun ReportsScreen(
 }
 
 @Composable
-private fun PeriodFilterRow(
+private fun ReportsHeadline(
+    periodLabel: String,
+    rangeText: String,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f),
+                        MaterialTheme.colorScheme.background.copy(alpha = 0f),
+                    ),
+                    radius = 520f,
+                ),
+            ),
+    ) {
+        Column(
+            modifier = Modifier.padding(top = 8.dp, bottom = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = "统计分析",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Black,
+            )
+            Text(
+                text = "$periodLabel 收支概览",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = rangeText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PeriodFilterCard(
+    selectedLabel: String,
+    rangeText: String,
     options: List<ReportPeriodPreset>,
     selected: ReportPeriodPreset,
     onSelect: (ReportPeriodPreset) -> Unit,
@@ -430,27 +451,48 @@ private fun PeriodFilterRow(
     val firstRow = options.take(4)
     val secondRow = options.drop(4)
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+    Card(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            firstRow.forEach { option ->
-                FilterChip(
-                    selected = option == selected,
-                    onClick = { onSelect(option) },
-                    label = { Text(option.label) },
-                )
-            }
-        }
-        if (secondRow.isNotEmpty()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                secondRow.forEach { option ->
+            Text(
+                text = "时间筛选",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "当前：$selectedLabel · $rangeText",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                firstRow.forEach { option ->
                     FilterChip(
                         selected = option == selected,
                         onClick = { onSelect(option) },
                         label = { Text(option.label) },
                     )
+                }
+            }
+            if (secondRow.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    secondRow.forEach { option ->
+                        FilterChip(
+                            selected = option == selected,
+                            onClick = { onSelect(option) },
+                            label = { Text(option.label) },
+                        )
+                    }
                 }
             }
         }
@@ -525,12 +567,13 @@ private fun CustomRangeSheet(
 }
 
 @Composable
-private fun StatsOverviewCard(
+private fun ReportHeroCard(
+    expense: String,
+    income: String,
     balance: String,
     periodLabel: String,
+    rangeText: String,
     ratioText: String,
-    income: String,
-    expense: String,
     progress: Float,
 ) {
     Card(
@@ -544,19 +587,19 @@ private fun StatsOverviewCard(
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             Text(
-                text = "周期总览",
+                text = "$periodLabel 支出",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onPrimary,
             )
             Text(
-                text = balance,
-                style = MaterialTheme.typography.headlineMedium,
+                text = expense,
+                style = MaterialTheme.typography.displaySmall,
                 fontWeight = FontWeight.Black,
                 color = MaterialTheme.colorScheme.onPrimary,
             )
             Text(
-                text = "当前结余",
+                text = "$rangeText · 这是当前周期总花销",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.84f),
             )
@@ -590,7 +633,7 @@ private fun StatsOverviewCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "$periodLabel 支出占收入 $ratioText",
+                    text = "支出占收入 $ratioText",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.92f),
                 )
@@ -616,15 +659,34 @@ private fun StatsOverviewCard(
                 DarkMetricCard(
                     modifier = Modifier.weight(1f),
                     label = "收入",
-                    value = "+$income",
+                    value = income,
                 )
                 DarkMetricCard(
                     modifier = Modifier.weight(1f),
-                    label = "支出",
-                    value = "-$expense",
+                    label = "结余",
+                    value = balance,
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ReportSectionHeader(
+    title: String,
+    subtitle: String,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            text = subtitle,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -699,31 +761,426 @@ fun SettingsScreen(
     members: List<MemberEntity>,
     accounts: List<AccountEntity>,
     categories: List<CategoryEntity>,
-    backupJsonPreview: String?,
+    onOpenCloudSync: () -> Unit,
+    onOpenMembers: () -> Unit,
+    onOpenAccounts: () -> Unit,
+    onOpenCategories: () -> Unit,
+    onOpenBackup: () -> Unit,
+) {
+    ScreenContainer(contentPadding = contentPadding) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item {
+                Text(
+                    text = "设置",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text("同步与管理", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            item {
+                SettingsEntryCard(
+                    title = "云端同步",
+                    subtitle = if (cloudState.isAuthenticated) {
+                        "${cloudState.username ?: cloudState.displayName.orEmpty()} · ${cloudState.books.size} 本账本"
+                    } else {
+                        "登录后同步账本"
+                    },
+                    onClick = onOpenCloudSync,
+                )
+            }
+            item {
+                SettingsEntryCard(
+                    title = "成员管理",
+                    subtitle = "${members.size} 位成员",
+                    onClick = onOpenMembers,
+                )
+            }
+            item {
+                SettingsEntryCard(
+                    title = "账户管理",
+                    subtitle = "${accounts.size} 个账户",
+                    onClick = onOpenAccounts,
+                )
+            }
+            item {
+                SettingsEntryCard(
+                    title = "分类管理",
+                    subtitle = "${categories.size} 个分类",
+                    onClick = onOpenCategories,
+                )
+            }
+            item {
+                SettingsEntryCard(
+                    title = "本地备份",
+                    subtitle = "导入与导出",
+                    onClick = onOpenBackup,
+                )
+            }
+            item {
+                HighlightCard(
+                    title = "关于应用",
+                    rows = listOf(
+                        "应用名称" to "鸿运账本",
+                        "模式" to "本地优先",
+                        "视觉" to "红金简约",
+                    ),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun CloudSyncSettingsScreen(
+    contentPadding: PaddingValues,
+    cloudState: CloudUiState,
+    onBack: () -> Unit,
     onOpenCloudAuth: () -> Unit,
     onRefreshCloud: () -> Unit,
     onSyncCloud: ((Result<Unit>) -> Unit) -> Unit,
     onLogoutCloud: ((Result<Unit>) -> Unit) -> Unit,
+) {
+    val context = LocalContext.current
+    ScreenContainer(contentPadding = contentPadding) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item {
+                SecondarySettingsHeader(
+                    title = "云端同步",
+                    subtitle = "登录、同步、退出",
+                    onBack = onBack,
+                )
+            }
+            item {
+                ActionCard(
+                    title = if (cloudState.isAuthenticated) "当前账号" else "云端账号",
+                    actionText = if (cloudState.isAuthenticated) "查看状态" else "登录 / 注册",
+                    onAction = onOpenCloudAuth,
+                ) {
+                    when {
+                        cloudState.isCheckingSession -> {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.width(18.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Text("正在继续上次登录")
+                            }
+                        }
+                        cloudState.isAuthenticated -> {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                ManageableInfoRow("云端用户", cloudState.displayName ?: cloudState.username.orEmpty())
+                                ManageableInfoRow("登录账号", cloudState.username ?: "-")
+                                ManageableInfoRow("云端账本", "${cloudState.books.size} 本")
+                                cloudState.lastSyncSummary?.takeIf { it.isNotBlank() }?.let { summary ->
+                                    Text(
+                                        text = "最近同步：$summary",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(onClick = onRefreshCloud) {
+                                        Text("刷新")
+                                    }
+                                    OutlinedButton(
+                                        enabled = !cloudState.isSyncing,
+                                        onClick = {
+                                            onSyncCloud { result ->
+                                                result.onSuccess { toast(context, "同步完成") }
+                                                result.onFailure { toast(context, it.message ?: "同步失败") }
+                                            }
+                                        },
+                                    ) {
+                                        if (cloudState.isSyncing) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.width(18.dp),
+                                                strokeWidth = 2.dp,
+                                            )
+                                        } else {
+                                            Text("立即同步")
+                                        }
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            onLogoutCloud { result ->
+                                                result.onFailure { toast(context, it.message ?: "退出失败") }
+                                            }
+                                        },
+                                    ) {
+                                        Text("退出")
+                                    }
+                                }
+                            }
+                        }
+                        else -> {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("当前仍是本地模式。")
+                                Text(
+                                    text = "点右上角登录 / 注册。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                cloudState.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                                    Text(
+                                        text = message,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MembersSettingsScreen(
+    contentPadding: PaddingValues,
+    members: List<MemberEntity>,
+    onBack: () -> Unit,
     onAddMember: (String) -> Unit,
-    onAddAccount: (String, Double) -> Unit,
-    onAddCategory: (TransactionType, String) -> Unit,
     onRenameMember: (MemberEntity, String) -> Unit,
     onDeactivateMember: (MemberEntity) -> Unit,
+) {
+    var showMemberSheet by rememberSaveable { mutableStateOf(false) }
+    var editingMember by remember { mutableStateOf<MemberEntity?>(null) }
+
+    ScreenContainer(contentPadding = contentPadding) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item {
+                SecondarySettingsHeader(
+                    title = "成员管理",
+                    subtitle = "新增、改名、停用",
+                    onBack = onBack,
+                )
+            }
+            item {
+                ActionCard(
+                    title = "成员列表",
+                    actionText = "新增成员",
+                    onAction = { showMemberSheet = true },
+                ) {
+                    if (members.isEmpty()) {
+                        Text("暂无成员")
+                    } else {
+                        members.forEachIndexed { index, member ->
+                            ManageableRow(
+                                label = member.name,
+                                value = "启用中",
+                                onEdit = { editingMember = member },
+                                onDeactivate = { onDeactivateMember(member) },
+                            )
+                            if (index != members.lastIndex) HorizontalDivider(modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showMemberSheet) {
+        SimpleInputSheet(
+            title = "新增成员",
+            fieldLabel = "成员名称",
+            onDismiss = { showMemberSheet = false },
+            onConfirm = { name ->
+                onAddMember(name)
+                showMemberSheet = false
+            },
+        )
+    }
+    if (editingMember != null) {
+        SimpleInputSheet(
+            title = "重命名成员",
+            fieldLabel = "成员名称",
+            initialValue = editingMember?.name.orEmpty(),
+            onDismiss = { editingMember = null },
+            onConfirm = { name ->
+                editingMember?.let { onRenameMember(it, name) }
+                editingMember = null
+            },
+        )
+    }
+}
+
+@Composable
+fun AccountsSettingsScreen(
+    contentPadding: PaddingValues,
+    accounts: List<AccountEntity>,
+    onBack: () -> Unit,
+    onAddAccount: (String, Double) -> Unit,
     onRenameAccount: (AccountEntity, String) -> Unit,
     onDeactivateAccount: (AccountEntity) -> Unit,
+) {
+    var showAccountSheet by rememberSaveable { mutableStateOf(false) }
+    var editingAccount by remember { mutableStateOf<AccountEntity?>(null) }
+
+    ScreenContainer(contentPadding = contentPadding) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item {
+                SecondarySettingsHeader(
+                    title = "账户管理",
+                    subtitle = "新增、改名、停用",
+                    onBack = onBack,
+                )
+            }
+            item {
+                ActionCard(
+                    title = "账户列表",
+                    actionText = "新增账户",
+                    onAction = { showAccountSheet = true },
+                ) {
+                    if (accounts.isEmpty()) {
+                        Text("暂无账户")
+                    } else {
+                        accounts.forEachIndexed { index, account ->
+                            ManageableRow(
+                                label = account.name,
+                                value = "初始 ${formatCurrency(account.initialBalance)}",
+                                onEdit = { editingAccount = account },
+                                onDeactivate = { onDeactivateAccount(account) },
+                            )
+                            if (index != accounts.lastIndex) HorizontalDivider(modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showAccountSheet) {
+        AccountInputSheet(
+            onDismiss = { showAccountSheet = false },
+            onConfirm = { name, initialBalance ->
+                onAddAccount(name, initialBalance)
+                showAccountSheet = false
+            },
+        )
+    }
+    if (editingAccount != null) {
+        SimpleInputSheet(
+            title = "重命名账户",
+            fieldLabel = "账户名称",
+            initialValue = editingAccount?.name.orEmpty(),
+            onDismiss = { editingAccount = null },
+            onConfirm = { name ->
+                editingAccount?.let { onRenameAccount(it, name) }
+                editingAccount = null
+            },
+        )
+    }
+}
+
+@Composable
+fun CategoriesSettingsScreen(
+    contentPadding: PaddingValues,
+    categories: List<CategoryEntity>,
+    onBack: () -> Unit,
+    onAddCategory: (TransactionType, String) -> Unit,
     onRenameCategory: (CategoryEntity, String) -> Unit,
     onDeactivateCategory: (CategoryEntity) -> Unit,
+) {
+    var showCategorySheet by rememberSaveable { mutableStateOf(false) }
+    var editingCategory by remember { mutableStateOf<CategoryEntity?>(null) }
+
+    ScreenContainer(contentPadding = contentPadding) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item {
+                SecondarySettingsHeader(
+                    title = "分类管理",
+                    subtitle = "新增、改名、停用",
+                    onBack = onBack,
+                )
+            }
+            item {
+                ActionCard(
+                    title = "分类列表",
+                    actionText = "新增分类",
+                    onAction = { showCategorySheet = true },
+                ) {
+                    if (categories.isEmpty()) {
+                        Text("暂无分类")
+                    } else {
+                        categories.forEachIndexed { index, category ->
+                            val typeLabel = if (category.type == TransactionType.EXPENSE) "支出" else "收入"
+                            ManageableRow(
+                                label = category.name,
+                                value = typeLabel,
+                                onEdit = { editingCategory = category },
+                                onDeactivate = { onDeactivateCategory(category) },
+                            )
+                            if (index != categories.lastIndex) HorizontalDivider(modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showCategorySheet) {
+        CategoryInputSheet(
+            onDismiss = { showCategorySheet = false },
+            onConfirm = { type, name ->
+                onAddCategory(type, name)
+                showCategorySheet = false
+            },
+        )
+    }
+    if (editingCategory != null) {
+        SimpleInputSheet(
+            title = "重命名分类",
+            fieldLabel = "分类名称",
+            initialValue = editingCategory?.name.orEmpty(),
+            onDismiss = { editingCategory = null },
+            onConfirm = { name ->
+                editingCategory?.let { onRenameCategory(it, name) }
+                editingCategory = null
+            },
+        )
+    }
+}
+
+@Composable
+fun BackupSettingsScreen(
+    contentPadding: PaddingValues,
+    backupJsonPreview: String?,
+    onBack: () -> Unit,
     onBuildBackupJson: () -> String?,
     onImportBackupJson: (String, (Result<String>) -> Unit) -> Unit,
     onGenerateBackupPreview: () -> Unit,
     onClearBackupPreview: () -> Unit,
 ) {
-    var showMemberSheet by rememberSaveable { mutableStateOf(false) }
-    var showAccountSheet by rememberSaveable { mutableStateOf(false) }
-    var showCategorySheet by rememberSaveable { mutableStateOf(false) }
-    var editingMember by remember { mutableStateOf<MemberEntity?>(null) }
-    var editingAccount by remember { mutableStateOf<AccountEntity?>(null) }
-    var editingCategory by remember { mutableStateOf<CategoryEntity?>(null) }
     var pendingExportContent by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val exportLauncher = rememberLauncherForActivityResult(
@@ -765,187 +1222,15 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
-                Text(
-                    text = "设置",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text("账本与备份", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            item {
-                ActionCard(
-                    title = "云端同步",
-                    actionText = if (cloudState.isAuthenticated) "查看账号" else "登录 / 注册",
-                    onAction = onOpenCloudAuth,
-                ) {
-                    when {
-                        cloudState.isCheckingSession -> {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.width(18.dp),
-                                    strokeWidth = 2.dp,
-                                )
-                                Text("正在继续上次登录")
-                            }
-                        }
-                        cloudState.isAuthenticated -> {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                ManageableInfoRow("云端用户", cloudState.displayName ?: cloudState.username.orEmpty())
-                                ManageableInfoRow("登录账号", cloudState.username ?: "-")
-                                ManageableInfoRow("云端账本", "${cloudState.books.size} 本")
-                                if (cloudState.books.isNotEmpty()) {
-                                    Text(
-                                        text = cloudState.books.joinToString(" · ") { it.name },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                                Text(
-                                    text = "当前已完成登录、账本拉取和基础推拉同步。",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                cloudState.lastSyncSummary?.takeIf { it.isNotBlank() }?.let { summary ->
-                                    Text(
-                                        text = "最近同步：$summary",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.primary,
-                                    )
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedButton(onClick = onRefreshCloud) {
-                                        Text("刷新")
-                                    }
-                                    OutlinedButton(
-                                        enabled = !cloudState.isSyncing,
-                                        onClick = {
-                                            onSyncCloud { result ->
-                                                result.onSuccess { toast(context, "同步完成") }
-                                                result.onFailure { toast(context, it.message ?: "同步失败") }
-                                            }
-                                        },
-                                    ) {
-                                        if (cloudState.isSyncing) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.width(18.dp),
-                                                strokeWidth = 2.dp,
-                                            )
-                                        } else {
-                                            Text("立即同步")
-                                        }
-                                    }
-                                    OutlinedButton(
-                                        onClick = {
-                                            onLogoutCloud { result ->
-                                                result.onFailure { toast(context, "退出失败") }
-                                            }
-                                        },
-                                    ) {
-                                        Text("退出")
-                                    }
-                                }
-                            }
-                        }
-                        else -> {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text("当前仍是本地模式。")
-                                Text(
-                                    text = "需要云端账本时，点右上角登录 / 注册即可。",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                cloudState.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
-                                    Text(
-                                        text = message,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.error,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            item {
-                ActionCard(
-                    title = "成员管理",
-                    actionText = "新增成员",
-                    onAction = { showMemberSheet = true },
-                ) {
-                    if (members.isEmpty()) {
-                        Text("暂无成员")
-                    } else {
-                        members.forEachIndexed { index, member ->
-                            ManageableRow(
-                                label = member.name,
-                                value = "启用中",
-                                onEdit = { editingMember = member },
-                                onDeactivate = { onDeactivateMember(member) },
-                            )
-                            if (index != members.lastIndex) HorizontalDivider(modifier = Modifier.fillMaxWidth())
-                        }
-                    }
-                }
-            }
-            item {
-                ActionCard(
-                    title = "账户管理",
-                    actionText = "新增账户",
-                    onAction = { showAccountSheet = true },
-                ) {
-                    if (accounts.isEmpty()) {
-                        Text("暂无账户")
-                    } else {
-                        accounts.forEachIndexed { index, account ->
-                            ManageableRow(
-                                label = account.name,
-                                value = "初始 ${formatCurrency(account.initialBalance)}",
-                                onEdit = { editingAccount = account },
-                                onDeactivate = { onDeactivateAccount(account) },
-                            )
-                            if (index != accounts.lastIndex) HorizontalDivider(modifier = Modifier.fillMaxWidth())
-                        }
-                    }
-                }
-            }
-            item {
-                ActionCard(
-                    title = "分类管理",
-                    actionText = "新增分类",
-                    onAction = { showCategorySheet = true },
-                ) {
-                    if (categories.isEmpty()) {
-                        Text("暂无分类")
-                    } else {
-                        categories.forEachIndexed { index, category ->
-                            val typeLabel = if (category.type == TransactionType.EXPENSE) "支出" else "收入"
-                            ManageableRow(
-                                label = category.name,
-                                value = typeLabel,
-                                onEdit = { editingCategory = category },
-                                onDeactivate = { onDeactivateCategory(category) },
-                            )
-                            if (index != categories.lastIndex) HorizontalDivider(modifier = Modifier.fillMaxWidth())
-                        }
-                    }
-                }
-            }
-            item {
-                HighlightCard(
-                    title = "当前版本",
-                    rows = listOf(
-                        "数据存储" to "纯本地 Room",
-                        "多人模式" to "同设备共享账本",
-                        "风格主题" to "鸿运红金",
-                    ),
-                )
-            }
-            item {
-                ActionCard(
+                SecondarySettingsHeader(
                     title = "本地备份",
+                    subtitle = "导出与导入",
+                    onBack = onBack,
+                )
+            }
+            item {
+                ActionCard(
+                    title = "备份文件",
                     actionText = "生成预览",
                     onAction = onGenerateBackupPreview,
                 ) {
@@ -985,73 +1270,60 @@ fun SettingsScreen(
             }
         }
     }
+}
 
-    if (showMemberSheet) {
-        SimpleInputSheet(
-            title = "新增成员",
-            fieldLabel = "成员名称",
-            onDismiss = { showMemberSheet = false },
-            onConfirm = { name ->
-                onAddMember(name)
-                showMemberSheet = false
-            },
+@Composable
+private fun SecondarySettingsHeader(
+    title: String,
+    subtitle: String,
+    onBack: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        TextButton(onClick = onBack) {
+            Text("返回")
+        }
+        Text(
+            text = title,
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            text = subtitle,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+}
 
-    if (showAccountSheet) {
-        AccountInputSheet(
-            onDismiss = { showAccountSheet = false },
-            onConfirm = { name, initialBalance ->
-                onAddAccount(name, initialBalance)
-                showAccountSheet = false
-            },
-        )
-    }
-
-    if (showCategorySheet) {
-        CategoryInputSheet(
-            onDismiss = { showCategorySheet = false },
-            onConfirm = { type, name ->
-                onAddCategory(type, name)
-                showCategorySheet = false
-            },
-        )
-    }
-    if (editingMember != null) {
-        SimpleInputSheet(
-            title = "重命名成员",
-            fieldLabel = "成员名称",
-            initialValue = editingMember?.name.orEmpty(),
-            onDismiss = { editingMember = null },
-            onConfirm = { name ->
-                editingMember?.let { onRenameMember(it, name) }
-                editingMember = null
-            },
-        )
-    }
-    if (editingAccount != null) {
-        SimpleInputSheet(
-            title = "重命名账户",
-            fieldLabel = "账户名称",
-            initialValue = editingAccount?.name.orEmpty(),
-            onDismiss = { editingAccount = null },
-            onConfirm = { name ->
-                editingAccount?.let { onRenameAccount(it, name) }
-                editingAccount = null
-            },
-        )
-    }
-    if (editingCategory != null) {
-        SimpleInputSheet(
-            title = "重命名分类",
-            fieldLabel = "分类名称",
-            initialValue = editingCategory?.name.orEmpty(),
-            onDismiss = { editingCategory = null },
-            onConfirm = { name ->
-                editingCategory?.let { onRenameCategory(it, name) }
-                editingCategory = null
-            },
-        )
+@Composable
+private fun SettingsEntryCard(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Card(
+        onClick = onClick,
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -1118,7 +1390,7 @@ fun CloudAuthScreen(
                 fontWeight = FontWeight.Black,
             )
             Text(
-                text = if (cloudState.isAuthenticated) "当前账号已连接，可查看和同步云端账本" else "登录或注册后，再拉取你的账本",
+                text = if (cloudState.isAuthenticated) "查看当前账号与账本" else "登录后拉取账本",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1161,7 +1433,7 @@ fun CloudAuthScreen(
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            text = "只有你点确认后才会继续登录。你也可以重新登录、注册，或者先用本地模式。",
+                            text = "点确认后继续。",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1184,8 +1456,7 @@ fun CloudAuthScreen(
                     rows = listOf(
                         "账号" to (cloudState.username ?: "-"),
                         "账本" to "${cloudState.books.size} 本",
-                        "连接" to "内置云端地址",
-                        "状态" to "已完成 bootstrap 拉取",
+                        "状态" to "已连接",
                     ),
                 )
                 if (cloudState.books.isNotEmpty()) {
@@ -1242,7 +1513,7 @@ fun CloudAuthScreen(
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         Text(
-                            text = "直接登录或注册即可，不需要额外配置。",
+                            text = "直接登录即可。",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1954,7 +2225,7 @@ private fun DashboardBookMenu(
         }
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
-                text = "个人账本",
+                text = "账本",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -2076,7 +2347,7 @@ private fun HeroDashboardCard(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 Text(
-                    text = "$bookName · 本月",
+                    text = bookName,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f),
                 )
@@ -2138,12 +2409,14 @@ fun NaturalLanguageEntryScreen(
     contentPadding: PaddingValues,
     state: AddTransactionState,
     onBack: () -> Unit,
+    onAddTransaction: (TransactionType, Double, Long, Long, Long, Instant, String) -> Unit,
     onParse: (String) -> NaturalLanguageParseResult,
     onSave: (String, Long, List<ParsedTransactionCandidate>, (Result<Unit>) -> Unit) -> Unit,
 ) {
     var rawText by rememberSaveable { mutableStateOf("") }
     var parseResult by remember { mutableStateOf<NaturalLanguageParseResult?>(null) }
     var selectedAccountId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var showDirectSheet by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
     val recentMemberName = remember(state.members, state.recentMemberId) {
         state.members.firstOrNull { it.id == state.recentMemberId }?.name.orEmpty()
@@ -2201,8 +2474,25 @@ fun NaturalLanguageEntryScreen(
                             .padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Button(
+                                modifier = Modifier.weight(1f),
+                                onClick = {},
+                            ) {
+                                Text("一句话")
+                            }
+                            OutlinedButton(
+                                modifier = Modifier.weight(1f),
+                                onClick = { showDirectSheet = true },
+                            ) {
+                                Text("直接记一笔")
+                            }
+                        }
                         Text(
-                            text = "一句话记一笔",
+                            text = "一句话记账",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                         )
@@ -2230,7 +2520,7 @@ fun NaturalLanguageEntryScreen(
                                 modifier = Modifier.weight(1f),
                                 onClick = { parseResult = onParse(rawText) },
                             ) {
-                                Text("解析")
+                                Text("开始解析")
                             }
                             OutlinedButton(
                                 modifier = Modifier.weight(1f),
@@ -2322,6 +2612,20 @@ fun NaturalLanguageEntryScreen(
                 }
             }
         }
+    }
+
+    if (showDirectSheet) {
+        AddTransactionSheet(
+            state = state,
+            editingTransaction = null,
+            onDismiss = { showDirectSheet = false },
+            onConfirm = { type, amount, memberId, accountId, categoryId, occurredAt, note ->
+                onAddTransaction(type, amount, memberId, accountId, categoryId, occurredAt, note)
+                showDirectSheet = false
+                toast(context, "已记入账本")
+                onBack()
+            },
+        )
     }
 }
 
