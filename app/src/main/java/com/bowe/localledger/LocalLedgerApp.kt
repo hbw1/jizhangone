@@ -7,6 +7,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.bowe.localledger.data.LedgerRepository
 import com.bowe.localledger.data.local.AppDatabase
 import com.bowe.localledger.data.remote.CloudAuthRepository
+import com.bowe.localledger.data.remote.CloudNlpRepository
 import com.bowe.localledger.data.remote.CloudSyncRepository
 import com.bowe.localledger.data.remote.NetworkSettingsStore
 import com.bowe.localledger.data.remote.RemoteLedgerDataSource
@@ -19,6 +20,8 @@ class LocalLedgerApp : Application() {
     lateinit var cloudAuthRepository: CloudAuthRepository
         private set
     lateinit var cloudSyncRepository: CloudSyncRepository
+        private set
+    lateinit var cloudNlpRepository: CloudNlpRepository
         private set
     lateinit var networkSettingsStore: NetworkSettingsStore
         private set
@@ -48,6 +51,10 @@ class LocalLedgerApp : Application() {
             database = database,
             tokenStore = tokenStore,
             cursorStore = syncCursorStore,
+            remoteDataSource = remoteDataSource,
+        )
+        cloudNlpRepository = CloudNlpRepository(
+            tokenStore = tokenStore,
             remoteDataSource = remoteDataSource,
         )
     }

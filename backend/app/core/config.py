@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 30
     auto_create_tables: bool = True
     cors_origins: list[str] = Field(default_factory=lambda: ["*"])
+    minimax_api_key: str | None = None
+    minimax_base_url: str = "https://api.minimax.io/v1"
+    minimax_model: str = "MiniMax-M1"
+    minimax_timeout_seconds: float = 30.0
 
     model_config = SettingsConfigDict(
         env_file=".env",

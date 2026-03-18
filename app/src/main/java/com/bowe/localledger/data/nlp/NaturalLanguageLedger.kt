@@ -18,7 +18,14 @@ data class NaturalLanguageParseResult(
     val diaryText: String,
     val candidates: List<ParsedTransactionCandidate>,
     val warnings: List<String> = emptyList(),
+    val parseMode: ParseMode = ParseMode.LOCAL,
+    val providerLabel: String? = null,
 )
+
+enum class ParseMode {
+    LOCAL,
+    CLOUD,
+}
 
 data class ParsedTransactionCandidate(
     val type: TransactionType,
@@ -44,6 +51,7 @@ class PlaceholderNaturalLanguageLedgerParser : NaturalLanguageLedgerParser {
                 diaryText = "",
                 candidates = emptyList(),
                 warnings = listOf("请输入要解析的内容。"),
+                parseMode = ParseMode.LOCAL,
             )
         }
 
@@ -90,6 +98,7 @@ class PlaceholderNaturalLanguageLedgerParser : NaturalLanguageLedgerParser {
             } else {
                 emptyList()
             },
+            parseMode = ParseMode.LOCAL,
         )
     }
 

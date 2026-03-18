@@ -1,6 +1,8 @@
 package com.bowe.localledger.data.remote
 
 import com.bowe.localledger.data.remote.dto.BootstrapDto
+import com.bowe.localledger.data.remote.dto.CloudParseRequestDto
+import com.bowe.localledger.data.remote.dto.CloudParseResponseDto
 import com.bowe.localledger.data.remote.dto.LoginRequestDto
 import com.bowe.localledger.data.remote.dto.RefreshRequestDto
 import com.bowe.localledger.data.remote.dto.RegisterRequestDto
@@ -31,6 +33,14 @@ class RemoteLedgerDataSource(
         authorization = accessToken.asBearer(),
         bookId = bookId,
         cursor = cursor,
+    )
+
+    suspend fun parseNaturalLanguage(
+        accessToken: String,
+        payload: CloudParseRequestDto,
+    ): CloudParseResponseDto = api().parseNaturalLanguage(
+        authorization = accessToken.asBearer(),
+        payload = payload,
     )
 
     suspend fun currentBaseUrl(): String = networkSettingsStore.getBaseUrl()

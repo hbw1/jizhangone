@@ -24,7 +24,13 @@ class NetworkSettingsStore(
                 throw error
             }
         }
-        .map { prefs -> prefs[Keys.BASE_URL] ?: NetworkConfig.DEFAULT_BASE_URL }
+        .map { prefs ->
+            when (val saved = prefs[Keys.BASE_URL]) {
+                null -> NetworkConfig.DEFAULT_BASE_URL
+                NetworkConfig.LEGACY_TAILSCALE_BASE_URL -> NetworkConfig.DEFAULT_BASE_URL
+                else -> normalizeBaseUrl(saved)
+            }
+        }
 
     suspend fun getBaseUrl(): String = baseUrl.first()
 
@@ -37,6 +43,9 @@ class NetworkSettingsStore(
     private fun normalizeBaseUrl(input: String): String {
         val trimmed = input.trim()
         if (trimmed.isBlank()) return NetworkConfig.DEFAULT_BASE_URL
+        if (trimmed == NetworkConfig.LEGACY_TAILSCALE_BASE_URL.removeSuffix("/")) {
+            return NetworkConfig.DEFAULT_BASE_URL
+        }
         return if (trimmed.endsWith("/")) trimmed else "$trimmed/"
     }
 

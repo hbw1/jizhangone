@@ -3,6 +3,8 @@ package com.bowe.localledger.data.remote
 import com.bowe.localledger.data.remote.dto.AuthSessionDto
 import com.bowe.localledger.data.remote.dto.BootstrapDto
 import com.bowe.localledger.data.remote.dto.LoginRequestDto
+import com.bowe.localledger.data.remote.dto.CloudParseRequestDto
+import com.bowe.localledger.data.remote.dto.CloudParseResponseDto
 import com.bowe.localledger.data.remote.dto.RefreshRequestDto
 import com.bowe.localledger.data.remote.dto.RegisterRequestDto
 import com.bowe.localledger.data.remote.dto.SyncPullResponseDto
@@ -11,6 +13,8 @@ import com.bowe.localledger.data.remote.dto.SyncPushResponseDto
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Credentials
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
@@ -38,21 +42,27 @@ interface LedgerApiService {
 
     @GET("v1/bootstrap")
     suspend fun bootstrap(
-        @Header("Authorization") authorization: String,
+        @Header(NetworkConfig.APP_AUTH_HEADER_NAME) authorization: String,
     ): BootstrapDto
 
     @POST("v1/sync/push")
     suspend fun pushChanges(
-        @Header("Authorization") authorization: String,
+        @Header(NetworkConfig.APP_AUTH_HEADER_NAME) authorization: String,
         @Body payload: SyncPushRequestDto,
     ): SyncPushResponseDto
 
     @GET("v1/sync/pull")
     suspend fun pullChanges(
-        @Header("Authorization") authorization: String,
+        @Header(NetworkConfig.APP_AUTH_HEADER_NAME) authorization: String,
         @Query("book_id") bookId: String,
         @Query("cursor") cursor: String? = null,
     ): SyncPullResponseDto
+
+    @POST("v1/nlp/parse-natural-language")
+    suspend fun parseNaturalLanguage(
+        @Header(NetworkConfig.APP_AUTH_HEADER_NAME) authorization: String,
+        @Body payload: CloudParseRequestDto,
+    ): CloudParseResponseDto
 
     companion object {
         fun create(baseUrl: String = NetworkConfig.DEFAULT_BASE_URL): LedgerApiService {
@@ -63,7 +73,25 @@ interface LedgerApiService {
             val logging = HttpLoggingInterceptor().apply {
                 level = HttpLoggingInterceptor.Level.BASIC
             }
+            val domainGateInterceptor = Interceptor { chain ->
+                val request = chain.request()
+                val nextRequest = if (request.url.host == NetworkConfig.DEFAULT_HOST) {
+                    request.newBuilder()
+                        .header(
+                            "Authorization",
+                            Credentials.basic(
+                                NetworkConfig.DOMAIN_GATE_USERNAME,
+                                NetworkConfig.DOMAIN_GATE_PASSWORD,
+                            ),
+                        )
+                        .build()
+                } else {
+                    request
+                }
+                chain.proceed(nextRequest)
+            }
             val client = OkHttpClient.Builder()
+                .addInterceptor(domainGateInterceptor)
                 .addInterceptor(logging)
                 .build()
 

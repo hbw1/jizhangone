@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.errors import api_http_exception
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.entities import User
@@ -20,10 +21,19 @@ async def sync_push(
 ) -> SyncPushResponse:
     try:
         return await push_changes(db, current_user, payload)
-    except (SyncPermissionError, SyncValidationError) as exc:
-        raise HTTPException(
+    except SyncPermissionError as exc:
+        raise api_http_exception(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="sync_book_forbidden",
+            message="当前账本没有同步权限",
+            details={"reason": str(exc)},
+        ) from exc
+    except SyncValidationError as exc:
+        raise api_http_exception(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
+            code="sync_invalid_payload",
+            message="同步请求不合法",
+            details={"reason": str(exc)},
         ) from exc
 
 
@@ -37,12 +47,16 @@ async def sync_pull(
     try:
         return await pull_changes(db, current_user, book_id=book_id, cursor=cursor)
     except SyncPermissionError as exc:
-        raise HTTPException(
+        raise api_http_exception(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(exc),
+            code="sync_book_forbidden",
+            message="当前账本没有同步权限",
+            details={"reason": str(exc)},
         ) from exc
     except SyncValidationError as exc:
-        raise HTTPException(
+        raise api_http_exception(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
+            code="sync_invalid_request",
+            message="同步参数不合法",
+            details={"reason": str(exc)},
         ) from exc

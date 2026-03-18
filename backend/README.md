@@ -38,6 +38,7 @@ http://localhost:8000/docs
 - `GET /v1/bootstrap`
 - `POST /v1/sync/push`
 - `GET /v1/sync/pull`
+- `POST /v1/nlp/parse-natural-language`
 
 ## 当前说明
 
@@ -56,3 +57,65 @@ http://localhost:8000/docs
   - `category`
   - `journal_entry`
   - `transaction`
+
+## MiniMax 智能解析
+
+如果你要给“一句话记账”接云端大模型解析，需要在环境变量里配置：
+
+```env
+MINIMAX_API_KEY=your-key
+MINIMAX_BASE_URL=https://api.minimax.io/v1
+MINIMAX_MODEL=MiniMax-M1
+MINIMAX_TIMEOUT_SECONDS=30
+```
+
+接口：
+
+- `POST /v1/nlp/parse-natural-language`
+
+请求体示例：
+
+```json
+{
+  "book_id": "your-book-id",
+  "raw_text": "今天和妈妈吃火锅花了300元，昨天爸爸买菜花了86元",
+  "today": "2026-03-17",
+  "timezone": "Asia/Shanghai"
+}
+```
+
+这个接口会：
+
+- 校验当前用户是否能访问该账本
+- 自动读取账本下的成员、账户、收入分类、支出分类作为上下文
+- 调用 MiniMax 做结构化解析
+- 返回候选账单列表，供客户端确认后再入账
+
+注意：
+
+- 当前实现依赖 MiniMax 的 OpenAI 兼容 `/chat/completions` 接口
+- 服务端只返回“解析建议”，不会直接入账
+
+## 错误返回格式
+
+现在服务端错误统一返回：
+
+```json
+{
+  "error": {
+    "code": "auth_invalid_credentials",
+    "message": "账号或密码错误",
+    "request_id": "0f6f5e0d-1f54-46cc-8f1f-8dfb8c9f2d83",
+    "details": {
+      "reason": "Invalid username or password"
+    }
+  }
+}
+```
+
+说明：
+
+- `code`：给客户端做稳定判断
+- `message`：直接给用户看
+- `request_id`：排查线上问题时对日志
+- `details`：开发和联调用的补充信息

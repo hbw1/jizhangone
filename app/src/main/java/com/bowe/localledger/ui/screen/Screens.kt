@@ -16,9 +16,12 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -71,11 +74,26 @@ import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.DpSize
+import com.bowe.localledger.data.remote.BOOK_NAME_MAX_LENGTH
+import com.bowe.localledger.data.remote.CLOUD_DISPLAY_NAME_MAX_LENGTH
+import com.bowe.localledger.data.remote.CLOUD_DISPLAY_NAME_MIN_LENGTH
+import com.bowe.localledger.data.remote.CLOUD_PASSWORD_MAX_LENGTH
+import com.bowe.localledger.data.remote.CLOUD_PASSWORD_MIN_LENGTH
+import com.bowe.localledger.data.remote.CLOUD_USERNAME_MAX_LENGTH
+import com.bowe.localledger.data.remote.CLOUD_USERNAME_MIN_LENGTH
+import com.bowe.localledger.data.remote.ENTITY_NAME_MAX_LENGTH
+import com.bowe.localledger.data.remote.NLP_RAW_TEXT_MAX_LENGTH
+import com.bowe.localledger.data.remote.clampToMaxLength
+import com.bowe.localledger.data.remote.maxLengthHint
+import com.bowe.localledger.data.remote.rangeLengthHint
 import com.bowe.localledger.data.DashboardData
 import com.bowe.localledger.data.ReportValue
 import com.bowe.localledger.data.ReportPeriodPreset
@@ -89,9 +107,11 @@ import com.bowe.localledger.data.local.entity.CategoryEntity
 import com.bowe.localledger.data.local.entity.MemberEntity
 import com.bowe.localledger.data.local.entity.TransactionType
 import com.bowe.localledger.data.nlp.NaturalLanguageParseResult
+import com.bowe.localledger.data.nlp.ParseMode
 import com.bowe.localledger.data.nlp.ParsedTransactionCandidate
 import com.bowe.localledger.ui.AddTransactionState
 import com.bowe.localledger.ui.CloudUiState
+import java.text.DecimalFormat
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -117,37 +137,36 @@ fun DashboardScreen(
     var showRenameBookSheet by rememberSaveable { mutableStateOf(false) }
     var showAddSheet by rememberSaveable { mutableStateOf(false) }
     ScreenContainer(contentPadding = contentPadding) {
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item {
-                DashboardBookMenu(
-                    books = books,
-                    currentBookId = currentBookId,
-                    onBookSelected = onBookSelected,
-                    onAddBook = { showBookSheet = true },
-                    onRenameBook = { showRenameBookSheet = true },
-                )
-            }
-            item {
-                HeroDashboardCard(
-                    bookName = dashboard?.bookName ?: "加载中",
-                    income = formatCurrency(dashboard?.income ?: 0.0),
-                    expense = formatCurrency(dashboard?.expense ?: 0.0),
-                    balance = formatSignedCurrency(dashboard?.balance ?: 0.0),
-                    onRecord = { showAddSheet = true },
-                    onOpenNaturalLanguage = onOpenNaturalLanguage,
-                )
-            }
+            DashboardBookMenu(
+                books = books,
+                currentBookId = currentBookId,
+                onBookSelected = onBookSelected,
+                onAddBook = { showBookSheet = true },
+                onRenameBook = { showRenameBookSheet = true },
+            )
+            HeroDashboardCard(
+                modifier = Modifier.weight(1f),
+                bookName = dashboard?.bookName ?: "加载中",
+                income = formatCurrency(dashboard?.income ?: 0.0),
+                expense = formatCurrency(dashboard?.expense ?: 0.0),
+                balance = formatSignedCurrency(dashboard?.balance ?: 0.0),
+                onRecord = { showAddSheet = true },
+                onOpenNaturalLanguage = onOpenNaturalLanguage,
+            )
         }
     }
     if (showBookSheet) {
         SimpleInputSheet(
             title = "新增账本",
             fieldLabel = "账本名称",
+            maxLength = BOOK_NAME_MAX_LENGTH,
+            requirementText = maxLengthHint(BOOK_NAME_MAX_LENGTH),
             onDismiss = { showBookSheet = false },
             onConfirm = { name ->
                 onAddBook(name)
@@ -171,6 +190,8 @@ fun DashboardScreen(
             title = "重命名账本",
             fieldLabel = "账本名称",
             initialValue = dashboard?.bookName.orEmpty(),
+            maxLength = BOOK_NAME_MAX_LENGTH,
+            requirementText = maxLengthHint(BOOK_NAME_MAX_LENGTH),
             onDismiss = { showRenameBookSheet = false },
             onConfirm = { name ->
                 onRenameBook(name)
@@ -194,6 +215,10 @@ fun TransactionsScreen(
     var selectedType by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedMember by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedAccount by rememberSaveable { mutableStateOf<String?>(null) }
+    val today = remember { LocalDate.now() }
+    val chartDays = remember(today) { (6 downTo 0).map { today.minusDays(it.toLong()) } }
+    val weekFormatter = remember { DateTimeFormatter.ofPattern("M-d") }
+    val shortDayFormatter = remember { DateTimeFormatter.ofPattern("E") }
 
     val filteredTransactions = remember(transactions, selectedType, selectedMember, selectedAccount) {
         transactions.filter { item ->
@@ -203,6 +228,37 @@ fun TransactionsScreen(
             typePass && memberPass && accountPass
         }
     }
+    val summaryLabel = remember(selectedType) {
+        when (selectedType) {
+            "INCOME" -> "总收入"
+            "EXPENSE" -> "总支出"
+            else -> "总流水"
+        }
+    }
+    val summaryAmount = remember(filteredTransactions, selectedType) {
+        when (selectedType) {
+            "INCOME" -> filteredTransactions.filter { it.type == TransactionType.INCOME }.sumOf { it.amount }
+            "EXPENSE" -> filteredTransactions.filter { it.type == TransactionType.EXPENSE }.sumOf { it.amount }
+            else -> filteredTransactions.sumOf { it.amount }
+        }
+    }
+    val weeklySummaryValues = remember(filteredTransactions, chartDays, selectedType) {
+        chartDays.map { date ->
+            filteredTransactions
+                .filter { item ->
+                    when (selectedType) {
+                        "INCOME" -> item.type == TransactionType.INCOME
+                        "EXPENSE" -> item.type == TransactionType.EXPENSE
+                        else -> true
+                    }
+                }
+                .filter { it.occurredAt.atZone(ZoneId.systemDefault()).toLocalDate() == date }
+                .sumOf { it.amount }
+        }
+    }
+    val summaryRangeText = remember(chartDays, weekFormatter) {
+        "${chartDays.first().format(weekFormatter)} - ${chartDays.last().format(weekFormatter)}"
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         ScreenContainer(contentPadding = contentPadding) {
@@ -210,20 +266,37 @@ fun TransactionsScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 item {
-                    Text(text = "交易明细", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Text("收支流水", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TransactionsHeroHeader(
+                        selectedType = selectedType,
+                        onSelectType = { selectedType = it },
+                    )
+                }
+                item {
+                    Text(
+                        text = summaryRangeText,
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Black,
+                    )
+                }
+                item {
+                    TransactionsSummaryCard(
+                        label = summaryLabel,
+                        amount = formatCurrency(summaryAmount),
+                        values = weeklySummaryValues,
+                        labels = chartDays.map { it.format(shortDayFormatter) },
+                    )
                 }
                 item {
                     TransactionFilters(
                         members = addTransactionState.members.map { it.name },
                         accounts = addTransactionState.accounts.map { it.name },
-                        selectedType = selectedType,
+                        selectedType = null,
                         selectedMember = selectedMember,
                         selectedAccount = selectedAccount,
-                        onTypeSelected = { selectedType = it },
+                        onTypeSelected = {},
                         onMemberSelected = { selectedMember = it },
                         onAccountSelected = { selectedAccount = it },
                     )
@@ -277,6 +350,128 @@ fun TransactionsScreen(
                     editingTransaction = null
                 },
             )
+        }
+    }
+}
+
+@Composable
+private fun TransactionsHeroHeader(
+    selectedType: String?,
+    onSelectType: (String?) -> Unit,
+) {
+    Card(
+        shape = RoundedCornerShape(999.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            listOf(null to "全部", "EXPENSE" to "支出", "INCOME" to "收入").forEach { item ->
+                Button(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(46.dp),
+                    onClick = { onSelectType(item.first) },
+                    shape = RoundedCornerShape(999.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (selectedType == item.first) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            Color.Transparent
+                        },
+                        contentColor = if (selectedType == item.first) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                    ),
+                    elevation = null,
+                ) {
+                    Text(item.second, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TransactionsSummaryCard(
+    label: String,
+    amount: String,
+    values: List<Double>,
+    labels: List<String>,
+) {
+    Card(
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                MoneyAmountText(
+                    value = amount,
+                    prominent = true,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            WeeklyValueChart(values = values, labels = labels)
+        }
+    }
+}
+
+@Composable
+private fun WeeklyValueChart(
+    values: List<Double>,
+    labels: List<String>,
+) {
+    val maxValue = values.maxOrNull()?.takeIf { it > 0.0 } ?: 1.0
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(150.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        values.forEachIndexed { index, value ->
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Spacer(modifier = Modifier.weight(1f))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(((value / maxValue) * 84.0).toFloat().coerceAtLeast(10f).dp)
+                        .background(
+                            brush = Brush.verticalGradient(
+                                listOf(
+                                    MaterialTheme.colorScheme.secondary,
+                                    MaterialTheme.colorScheme.primary,
+                                ),
+                            ),
+                            shape = RoundedCornerShape(14.dp),
+                        ),
+                )
+                Text(
+                    text = labels.getOrElse(index) { "" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }
@@ -448,8 +643,7 @@ private fun PeriodFilterCard(
     selected: ReportPeriodPreset,
     onSelect: (ReportPeriodPreset) -> Unit,
 ) {
-    val firstRow = options.take(4)
-    val secondRow = options.drop(4)
+    val rows = options.chunked(3)
 
     Card(
         shape = RoundedCornerShape(24.dp),
@@ -472,30 +666,53 @@ private fun PeriodFilterCard(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                firstRow.forEach { option ->
-                    FilterChip(
-                        selected = option == selected,
-                        onClick = { onSelect(option) },
-                        label = { Text(option.label) },
-                    )
-                }
-            }
-            if (secondRow.isNotEmpty()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    secondRow.forEach { option ->
-                        FilterChip(
+            rows.forEach { rowOptions ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    rowOptions.forEach { option ->
+                        PeriodOptionButton(
+                            modifier = Modifier.weight(1f),
+                            label = option.label,
                             selected = option == selected,
                             onClick = { onSelect(option) },
-                            label = { Text(option.label) },
                         )
+                    }
+                    repeat(3 - rowOptions.size) {
+                        Spacer(modifier = Modifier.weight(1f))
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun PeriodOptionButton(
+    modifier: Modifier = Modifier,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Button(
+        modifier = modifier.height(56.dp),
+        onClick = onClick,
+        shape = RoundedCornerShape(20.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+        ),
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+    ) {
+        Text(
+            text = label,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+        )
     }
 }
 
@@ -592,10 +809,9 @@ private fun ReportHeroCard(
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onPrimary,
             )
-            Text(
-                text = expense,
-                style = MaterialTheme.typography.displaySmall,
-                fontWeight = FontWeight.Black,
+            MoneyAmountText(
+                value = expense,
+                prominent = true,
                 color = MaterialTheme.colorScheme.onPrimary,
             )
             Text(
@@ -704,7 +920,9 @@ private fun DarkMetricCard(
         ),
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
@@ -712,13 +930,48 @@ private fun DarkMetricCard(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.84f),
             )
-            Text(
-                text = value,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Black,
+            MoneyAmountText(
+                value = value,
+                prominent = false,
                 color = MaterialTheme.colorScheme.onPrimary,
             )
         }
+    }
+}
+
+@Composable
+private fun HeroActionButton(
+    modifier: Modifier = Modifier,
+    label: String,
+    emphasized: Boolean,
+    compact: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Button(
+        modifier = if (compact) modifier.height(64.dp) else modifier.fillMaxHeight(),
+        shape = RoundedCornerShape(24.dp),
+        onClick = onClick,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (emphasized) {
+                MaterialTheme.colorScheme.secondary
+            } else {
+                MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.14f)
+            },
+            contentColor = if (emphasized) {
+                MaterialTheme.colorScheme.onSecondary
+            } else {
+                MaterialTheme.colorScheme.onPrimary
+            },
+        ),
+    ) {
+        Text(
+            text = label,
+            style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            maxLines = if (compact) 1 else 2,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -729,7 +982,7 @@ private fun StatsSummaryCard(
     value: String,
 ) {
     Card(
-        modifier = modifier,
+        modifier = modifier.height(148.dp),
         shape = RoundedCornerShape(26.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -745,10 +998,56 @@ private fun StatsSummaryCard(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            MoneyAmountText(
+                value = value,
+                prominent = false,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MoneyAmountText(
+    value: String,
+    prominent: Boolean,
+    color: Color,
+) {
+    val wholePart = remember(value) { value.substringBefore('.') }
+    val fractionPart = remember(value) {
+        value.substringAfter('.', "").takeIf { it.isNotBlank() }?.let { ".$it" }.orEmpty()
+    }
+    val wholeStyle = when {
+        prominent && wholePart.length <= 8 -> MaterialTheme.typography.displayLarge
+        prominent -> MaterialTheme.typography.displaySmall
+        wholePart.length <= 8 -> MaterialTheme.typography.headlineSmall
+        else -> MaterialTheme.typography.titleLarge
+    }
+    val fractionStyle = if (prominent) {
+        MaterialTheme.typography.titleLarge
+    } else {
+        MaterialTheme.typography.titleMedium
+    }
+
+    Row(
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            text = wholePart,
+            style = wholeStyle,
+            fontWeight = FontWeight.Black,
+            color = color,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (fractionPart.isNotEmpty()) {
             Text(
-                text = value,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Black,
+                text = fractionPart,
+                style = fractionStyle,
+                fontWeight = FontWeight.Bold,
+                color = color.copy(alpha = 0.92f),
+                maxLines = 1,
             )
         }
     }
@@ -775,12 +1074,60 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
-                Text(
-                    text = "设置",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
+                SecondarySettingsHeader(
+                    title = "设置",
+                    subtitle = "同步与管理",
+                    onBack = {},
+                    showBack = false,
                 )
-                Text("同步与管理", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            item {
+                StackedSurfaceCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(240.dp),
+                ) {
+                    Text(
+                        text = "鸿运账本",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Black,
+                    )
+                    Text(
+                        text = if (cloudState.isAuthenticated) "云端已连接" else "本地优先",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        SettingsHeroMetric(
+                            modifier = Modifier.weight(1f),
+                            label = "成员",
+                            value = "${members.size}",
+                        )
+                        SettingsHeroMetric(
+                            modifier = Modifier.weight(1f),
+                            label = "账户",
+                            value = "${accounts.size}",
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        SettingsHeroMetric(
+                            modifier = Modifier.weight(1f),
+                            label = "分类",
+                            value = "${categories.size}",
+                        )
+                        SettingsHeroMetric(
+                            modifier = Modifier.weight(1f),
+                            label = "账本",
+                            value = if (cloudState.isAuthenticated) "${cloudState.books.size}" else "本地",
+                        )
+                    }
+                }
             }
             item {
                 SettingsEntryCard(
@@ -822,14 +1169,7 @@ fun SettingsScreen(
                 )
             }
             item {
-                HighlightCard(
-                    title = "关于应用",
-                    rows = listOf(
-                        "应用名称" to "鸿运账本",
-                        "模式" to "本地优先",
-                        "视觉" to "红金简约",
-                    ),
-                )
+                EmptyCard("本地优先，云端可选。")
             }
         }
     }
@@ -847,27 +1187,30 @@ fun CloudSyncSettingsScreen(
 ) {
     val context = LocalContext.current
     ScreenContainer(contentPadding = contentPadding) {
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item {
-                SecondarySettingsHeader(
-                    title = "云端同步",
-                    subtitle = "登录、同步、退出",
-                    onBack = onBack,
-                )
-            }
-            item {
-                ActionCard(
-                    title = if (cloudState.isAuthenticated) "当前账号" else "云端账号",
-                    actionText = if (cloudState.isAuthenticated) "查看状态" else "登录 / 注册",
-                    onAction = onOpenCloudAuth,
-                ) {
-                    when {
-                        cloudState.isCheckingSession -> {
+            SecondarySettingsHeader(
+                title = "云端同步",
+                subtitle = "登录、同步、退出",
+                onBack = onBack,
+            )
+            StackedSurfaceCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            ) {
+                when {
+                    cloudState.isCheckingSession -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -879,67 +1222,119 @@ fun CloudSyncSettingsScreen(
                                 Text("正在继续上次登录")
                             }
                         }
-                        cloudState.isAuthenticated -> {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                ManageableInfoRow("云端用户", cloudState.displayName ?: cloudState.username.orEmpty())
-                                ManageableInfoRow("登录账号", cloudState.username ?: "-")
-                                ManageableInfoRow("云端账本", "${cloudState.books.size} 本")
-                                cloudState.lastSyncSummary?.takeIf { it.isNotBlank() }?.let { summary ->
-                                    Text(
-                                        text = "最近同步：$summary",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.primary,
+                    }
+                    cloudState.isAuthenticated -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text("当前账号", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+                            Text(
+                                cloudState.displayName ?: cloudState.username.orEmpty(),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                SettingsHeroMetric(
+                                    modifier = Modifier.weight(1f),
+                                    label = "账号",
+                                    value = cloudState.username ?: "-",
+                                )
+                                SettingsHeroMetric(
+                                    modifier = Modifier.weight(1f),
+                                    label = "账本",
+                                    value = "${cloudState.books.size}",
+                                )
+                            }
+                            cloudState.lastSyncSummary?.takeIf { it.isNotBlank() }?.let { summary ->
+                                Text(
+                                    text = "最近同步：$summary",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                            Button(
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !cloudState.isSyncing,
+                                onClick = {
+                                    onSyncCloud { result ->
+                                        result.onSuccess { toast(context, "同步完成") }
+                                        result.onFailure { toast(context, it.message ?: "同步失败") }
+                                    }
+                                },
+                            ) {
+                                if (cloudState.isSyncing) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.width(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.onPrimary,
                                     )
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedButton(onClick = onRefreshCloud) {
-                                        Text("刷新")
-                                    }
-                                    OutlinedButton(
-                                        enabled = !cloudState.isSyncing,
-                                        onClick = {
-                                            onSyncCloud { result ->
-                                                result.onSuccess { toast(context, "同步完成") }
-                                                result.onFailure { toast(context, it.message ?: "同步失败") }
-                                            }
-                                        },
-                                    ) {
-                                        if (cloudState.isSyncing) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.width(18.dp),
-                                                strokeWidth = 2.dp,
-                                            )
-                                        } else {
-                                            Text("立即同步")
-                                        }
-                                    }
-                                    OutlinedButton(
-                                        onClick = {
-                                            onLogoutCloud { result ->
-                                                result.onFailure { toast(context, it.message ?: "退出失败") }
-                                            }
-                                        },
-                                    ) {
-                                        Text("退出")
-                                    }
+                                } else {
+                                    Text("立即同步")
                                 }
                             }
-                        }
-                        else -> {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text("当前仍是本地模式。")
-                                Text(
-                                    text = "点右上角登录 / 注册。",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                cloudState.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
-                                    Text(
-                                        text = message,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.error,
-                                    )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                OutlinedButton(
+                                    modifier = Modifier.weight(1f),
+                                    onClick = onOpenCloudAuth,
+                                ) {
+                                    Text("账号信息")
                                 }
+                                OutlinedButton(
+                                    modifier = Modifier.weight(1f),
+                                    onClick = onRefreshCloud,
+                                ) {
+                                    Text("刷新状态")
+                                }
+                            }
+                            OutlinedButton(
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = {
+                                    onLogoutCloud { result ->
+                                        result.onFailure { toast(context, it.message ?: "退出失败") }
+                                    }
+                                },
+                            ) {
+                                Text("退出当前账号")
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
+                    }
+                    else -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text("云端账号", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+                            Text("当前仍是本地模式。")
+                            Text(
+                                text = "登录后同步账本。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            cloudState.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                                Text(
+                                    text = message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = onOpenCloudAuth,
+                            ) {
+                                Text("登录 / 注册")
                             }
                         }
                     }
@@ -976,24 +1371,36 @@ fun MembersSettingsScreen(
                 )
             }
             item {
-                ActionCard(
-                    title = "成员列表",
-                    actionText = "新增成员",
-                    onAction = { showMemberSheet = true },
+                StackedSurfaceCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp),
                 ) {
-                    if (members.isEmpty()) {
-                        Text("暂无成员")
-                    } else {
-                        members.forEachIndexed { index, member ->
-                            ManageableRow(
-                                label = member.name,
-                                value = "启用中",
-                                onEdit = { editingMember = member },
-                                onDeactivate = { onDeactivateMember(member) },
-                            )
-                            if (index != members.lastIndex) HorizontalDivider(modifier = Modifier.fillMaxWidth())
-                        }
+                    Text("成员管理", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+                    Text("新增、改名、停用", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    SettingsHeroMetric(
+                        modifier = Modifier.fillMaxWidth(),
+                        label = "当前成员",
+                        value = "${members.size}",
+                    )
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { showMemberSheet = true },
+                    ) {
+                        Text("新增成员")
                     }
+                }
+            }
+            if (members.isEmpty()) {
+                item { EmptyCard("暂无成员") }
+            } else {
+                items(members, key = { it.id }) { member ->
+                    SettingsListItemCard(
+                        title = member.name,
+                        subtitle = "启用中",
+                        onEdit = { editingMember = member },
+                        onDeactivate = { onDeactivateMember(member) },
+                    )
                 }
             }
         }
@@ -1003,6 +1410,8 @@ fun MembersSettingsScreen(
         SimpleInputSheet(
             title = "新增成员",
             fieldLabel = "成员名称",
+            maxLength = ENTITY_NAME_MAX_LENGTH,
+            requirementText = maxLengthHint(ENTITY_NAME_MAX_LENGTH),
             onDismiss = { showMemberSheet = false },
             onConfirm = { name ->
                 onAddMember(name)
@@ -1015,6 +1424,8 @@ fun MembersSettingsScreen(
             title = "重命名成员",
             fieldLabel = "成员名称",
             initialValue = editingMember?.name.orEmpty(),
+            maxLength = ENTITY_NAME_MAX_LENGTH,
+            requirementText = maxLengthHint(ENTITY_NAME_MAX_LENGTH),
             onDismiss = { editingMember = null },
             onConfirm = { name ->
                 editingMember?.let { onRenameMember(it, name) }
@@ -1051,24 +1462,36 @@ fun AccountsSettingsScreen(
                 )
             }
             item {
-                ActionCard(
-                    title = "账户列表",
-                    actionText = "新增账户",
-                    onAction = { showAccountSheet = true },
+                StackedSurfaceCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp),
                 ) {
-                    if (accounts.isEmpty()) {
-                        Text("暂无账户")
-                    } else {
-                        accounts.forEachIndexed { index, account ->
-                            ManageableRow(
-                                label = account.name,
-                                value = "初始 ${formatCurrency(account.initialBalance)}",
-                                onEdit = { editingAccount = account },
-                                onDeactivate = { onDeactivateAccount(account) },
-                            )
-                            if (index != accounts.lastIndex) HorizontalDivider(modifier = Modifier.fillMaxWidth())
-                        }
+                    Text("账户管理", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+                    Text("新增、改名、停用", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    SettingsHeroMetric(
+                        modifier = Modifier.fillMaxWidth(),
+                        label = "当前账户",
+                        value = "${accounts.size}",
+                    )
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { showAccountSheet = true },
+                    ) {
+                        Text("新增账户")
                     }
+                }
+            }
+            if (accounts.isEmpty()) {
+                item { EmptyCard("暂无账户") }
+            } else {
+                items(accounts, key = { it.id }) { account ->
+                    SettingsListItemCard(
+                        title = account.name,
+                        subtitle = "初始 ${formatCurrency(account.initialBalance)}",
+                        onEdit = { editingAccount = account },
+                        onDeactivate = { onDeactivateAccount(account) },
+                    )
                 }
             }
         }
@@ -1088,6 +1511,8 @@ fun AccountsSettingsScreen(
             title = "重命名账户",
             fieldLabel = "账户名称",
             initialValue = editingAccount?.name.orEmpty(),
+            maxLength = ENTITY_NAME_MAX_LENGTH,
+            requirementText = maxLengthHint(ENTITY_NAME_MAX_LENGTH),
             onDismiss = { editingAccount = null },
             onConfirm = { name ->
                 editingAccount?.let { onRenameAccount(it, name) }
@@ -1124,25 +1549,37 @@ fun CategoriesSettingsScreen(
                 )
             }
             item {
-                ActionCard(
-                    title = "分类列表",
-                    actionText = "新增分类",
-                    onAction = { showCategorySheet = true },
+                StackedSurfaceCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp),
                 ) {
-                    if (categories.isEmpty()) {
-                        Text("暂无分类")
-                    } else {
-                        categories.forEachIndexed { index, category ->
-                            val typeLabel = if (category.type == TransactionType.EXPENSE) "支出" else "收入"
-                            ManageableRow(
-                                label = category.name,
-                                value = typeLabel,
-                                onEdit = { editingCategory = category },
-                                onDeactivate = { onDeactivateCategory(category) },
-                            )
-                            if (index != categories.lastIndex) HorizontalDivider(modifier = Modifier.fillMaxWidth())
-                        }
+                    Text("分类管理", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+                    Text("新增、改名、停用", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    SettingsHeroMetric(
+                        modifier = Modifier.fillMaxWidth(),
+                        label = "当前分类",
+                        value = "${categories.size}",
+                    )
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { showCategorySheet = true },
+                    ) {
+                        Text("新增分类")
                     }
+                }
+            }
+            if (categories.isEmpty()) {
+                item { EmptyCard("暂无分类") }
+            } else {
+                items(categories, key = { it.id }) { category ->
+                    val typeLabel = if (category.type == TransactionType.EXPENSE) "支出" else "收入"
+                    SettingsListItemCard(
+                        title = category.name,
+                        subtitle = typeLabel,
+                        onEdit = { editingCategory = category },
+                        onDeactivate = { onDeactivateCategory(category) },
+                    )
                 }
             }
         }
@@ -1162,6 +1599,8 @@ fun CategoriesSettingsScreen(
             title = "重命名分类",
             fieldLabel = "分类名称",
             initialValue = editingCategory?.name.orEmpty(),
+            maxLength = ENTITY_NAME_MAX_LENGTH,
+            requirementText = maxLengthHint(ENTITY_NAME_MAX_LENGTH),
             onDismiss = { editingCategory = null },
             onConfirm = { name ->
                 editingCategory?.let { onRenameCategory(it, name) }
@@ -1229,12 +1668,20 @@ fun BackupSettingsScreen(
                 )
             }
             item {
-                ActionCard(
-                    title = "备份文件",
-                    actionText = "生成预览",
-                    onAction = onGenerateBackupPreview,
+                StackedSurfaceCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(if (backupJsonPreview.isNullOrBlank()) 200.dp else 320.dp),
                 ) {
+                    Text("本地备份", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+                    Text("导出与导入", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (backupJsonPreview.isNullOrBlank()) {
+                        Button(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = onGenerateBackupPreview,
+                        ) {
+                            Text("生成预览")
+                        }
                         Text("先生成一份本地备份。")
                     } else {
                         Text(
@@ -1277,10 +1724,13 @@ private fun SecondarySettingsHeader(
     title: String,
     subtitle: String,
     onBack: () -> Unit,
+    showBack: Boolean = true,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        TextButton(onClick = onBack) {
-            Text("返回")
+        if (showBack) {
+            TextButton(onClick = onBack) {
+                Text("返回")
+            }
         }
         Text(
             text = title,
@@ -1296,6 +1746,29 @@ private fun SecondarySettingsHeader(
 }
 
 @Composable
+private fun SettingsHeroMetric(
+    modifier: Modifier = Modifier,
+    label: String,
+    value: String,
+) {
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+        }
+    }
+}
+
+@Composable
 private fun SettingsEntryCard(
     title: String,
     subtitle: String,
@@ -1307,22 +1780,61 @@ private fun SettingsEntryCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                text = ">",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsListItemCard(
+    title: String,
+    subtitle: String,
+    onEdit: () -> Unit,
+    onDeactivate: () -> Unit,
+) {
+    Card(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onEdit) { Text("改名") }
+                TextButton(onClick = onDeactivate) { Text("停用") }
+            }
         }
     }
 }
@@ -1356,6 +1868,7 @@ fun CloudAuthScreen(
     onUseLocalMode: ((Result<Unit>) -> Unit) -> Unit,
     onLogin: (String, String, (Result<Unit>) -> Unit) -> Unit,
     onRegister: (String, String, String, (Result<Unit>) -> Unit) -> Unit,
+    onLogout: ((Result<Unit>) -> Unit) -> Unit = {},
 ) {
     val context = LocalContext.current
     var mode by rememberSaveable { mutableStateOf(CloudAuthMode.LOGIN) }
@@ -1396,15 +1909,14 @@ fun CloudAuthScreen(
             )
 
             if (cloudState.isCheckingSession && !cloudState.isAuthenticated) {
-                Card(
-                    shape = RoundedCornerShape(28.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                StackedSurfaceCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp),
                 ) {
                     Row(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(20.dp),
+                            .fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -1416,38 +1928,31 @@ fun CloudAuthScreen(
                     }
                 }
             } else if (cloudState.hasSavedSession && !cloudState.isAuthenticated) {
-                Card(
-                    shape = RoundedCornerShape(28.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                StackedSurfaceCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(220.dp),
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    Text(
+                        text = "检测到上次云端登录",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Black,
+                    )
+                    Text(
+                        text = "点确认后继续。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = {
+                            onResumeCloud { result ->
+                                result.onSuccess { onEnterApp() }
+                                result.onFailure { toast(context, it.message ?: "继续连接失败") }
+                            }
+                        },
                     ) {
-                        Text(
-                            text = "检测到上次云端登录",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text(
-                            text = "点确认后继续。",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Button(
-                            modifier = Modifier.fillMaxWidth(),
-                            onClick = {
-                                onResumeCloud { result ->
-                                    result.onSuccess { onEnterApp() }
-                                    result.onFailure { toast(context, it.message ?: "继续连接失败") }
-                                }
-                            },
-                        ) {
-                            Text("继续上次登录")
-                        }
+                        Text("继续上次登录")
                     }
                 }
             } else if (cloudState.isAuthenticated) {
@@ -1460,25 +1965,20 @@ fun CloudAuthScreen(
                     ),
                 )
                 if (cloudState.books.isNotEmpty()) {
-                    Card(
-                        shape = RoundedCornerShape(24.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    StackedSurfaceCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(220.dp),
                     ) {
-                        Column(
-                            modifier = Modifier.padding(18.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            Text(
-                                text = "云端账本",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                            )
-                            cloudState.books.forEachIndexed { index, book ->
-                                ManageableInfoRow(book.name, "角色 ${book.role}")
-                                if (index != cloudState.books.lastIndex) {
-                                    HorizontalDivider()
-                                }
+                        Text(
+                            text = "云端账本",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Black,
+                        )
+                        cloudState.books.forEachIndexed { index, book ->
+                            ManageableInfoRow(book.name, "角色 ${book.role}")
+                            if (index != cloudState.books.lastIndex) {
+                                HorizontalDivider()
                             }
                         }
                     }
@@ -1488,6 +1988,16 @@ fun CloudAuthScreen(
                     onClick = onBack,
                 ) {
                     Text("返回应用")
+                }
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        onLogout { result ->
+                            result.onFailure { toast(context, it.message ?: "退出失败") }
+                        }
+                    },
+                ) {
+                    Text("退出当前账号")
                 }
             } else {
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -1501,131 +2011,154 @@ fun CloudAuthScreen(
                     }
                 }
 
-                Card(
-                    shape = RoundedCornerShape(28.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                StackedSurfaceCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    Text(
+                        text = "默认已连接菠萝屋云端。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(
+                        modifier = Modifier.align(Alignment.End),
+                        onClick = { showAdvancedSettings = !showAdvancedSettings },
                     ) {
-                        Text(
-                            text = "直接登录即可。",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        Text(if (showAdvancedSettings) "收起切换服务" else "切换服务")
+                    }
+                    if (showAdvancedSettings) {
+                        OutlinedTextField(
+                            value = baseUrl,
+                            onValueChange = { baseUrl = it },
+                            label = { Text("云端地址") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
                         )
-                        TextButton(
-                            modifier = Modifier.align(Alignment.End),
-                            onClick = { showAdvancedSettings = !showAdvancedSettings },
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Text(if (showAdvancedSettings) "收起高级设置" else "高级设置")
-                        }
-                        if (showAdvancedSettings) {
-                            OutlinedTextField(
-                                value = baseUrl,
-                                onValueChange = { baseUrl = it },
-                                label = { Text("服务器地址") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true,
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            OutlinedButton(
+                                modifier = Modifier.weight(1f),
+                                onClick = {
+                                    baseUrl = com.bowe.localledger.data.remote.NetworkConfig.DEFAULT_BASE_URL
+                                    onSaveBaseUrl(baseUrl) { result ->
+                                        result.onSuccess { toast(context, "已恢复默认服务") }
+                                        result.onFailure { toast(context, it.message ?: "恢复失败") }
+                                    }
+                                },
                             ) {
-                                OutlinedButton(
-                                    modifier = Modifier.weight(1f),
-                                    onClick = {
-                                        baseUrl = com.bowe.localledger.data.remote.NetworkConfig.DEFAULT_BASE_URL
-                                        onSaveBaseUrl(baseUrl) { result ->
-                                            result.onSuccess { toast(context, "已恢复默认云端") }
-                                            result.onFailure { toast(context, it.message ?: "恢复失败") }
-                                        }
-                                    },
-                                ) {
-                                    Text("恢复默认")
-                                }
-                                OutlinedButton(
-                                    modifier = Modifier.weight(1f),
-                                    onClick = {
-                                        onSaveBaseUrl(baseUrl) { result ->
-                                            result.onSuccess { toast(context, "服务器地址已保存") }
-                                            result.onFailure { toast(context, it.message ?: "保存失败") }
-                                        }
-                                    },
-                                ) {
-                                    Text("保存设置")
-                                }
+                                Text("恢复默认")
+                            }
+                            OutlinedButton(
+                                modifier = Modifier.weight(1f),
+                                onClick = {
+                                    onSaveBaseUrl(baseUrl) { result ->
+                                        result.onSuccess { toast(context, "云端地址已保存") }
+                                        result.onFailure { toast(context, it.message ?: "保存失败") }
+                                    }
+                                },
+                            ) {
+                                Text("保存设置")
                             }
                         }
-                        if (mode == CloudAuthMode.REGISTER) {
-                            OutlinedTextField(
-                                value = displayName,
-                                onValueChange = { displayName = it },
-                                label = { Text("昵称") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true,
-                            )
-                        }
+                    }
+                    if (mode == CloudAuthMode.REGISTER) {
                         OutlinedTextField(
-                            value = username,
-                            onValueChange = { username = it },
-                            label = { Text("账号") },
+                            value = displayName,
+                            onValueChange = { displayName = clampToMaxLength(it, CLOUD_DISPLAY_NAME_MAX_LENGTH) },
+                            label = { Text("昵称") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
-                        )
-                        OutlinedTextField(
-                            value = password,
-                            onValueChange = { password = it },
-                            label = { Text("密码") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            visualTransformation = PasswordVisualTransformation(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        )
-                        Button(
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !cloudState.isSubmitting,
-                            onClick = {
-                                if (mode == CloudAuthMode.LOGIN) {
-                                    onLogin(username, password) { result ->
-                                        result.onSuccess { onEnterApp() }
-                                        result.onFailure { toast(context, it.message ?: "登录失败") }
-                                    }
-                                } else {
-                                    onRegister(username, password, displayName) { result ->
-                                        result.onSuccess { onEnterApp() }
-                                        result.onFailure { toast(context, it.message ?: "注册失败") }
-                                    }
-                                }
-                            },
-                        ) {
-                            if (cloudState.isSubmitting) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.width(18.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.onPrimary,
+                            supportingText = {
+                                LengthSupportingText(
+                                    currentLength = displayName.length,
+                                    maxLength = CLOUD_DISPLAY_NAME_MAX_LENGTH,
+                                    requirementText = rangeLengthHint(
+                                        CLOUD_DISPLAY_NAME_MIN_LENGTH,
+                                        CLOUD_DISPLAY_NAME_MAX_LENGTH,
+                                    ),
                                 )
-                            } else {
-                                Text(if (mode == CloudAuthMode.LOGIN) "登录并拉取账本" else "注册并初始化账本")
-                            }
-                        }
-                        OutlinedButton(
-                            modifier = Modifier.fillMaxWidth(),
-                            onClick = {
-                                onUseLocalMode { result ->
-                                    result.onSuccess {
-                                        toast(context, "已进入本地模式")
-                                        onEnterApp()
-                                    }
-                                    result.onFailure { toast(context, it.message ?: "进入本地模式失败") }
-                                }
                             },
-                        ) {
-                            Text("暂用本地模式")
+                        )
+                    }
+                    OutlinedTextField(
+                        value = username,
+                        onValueChange = { username = clampToMaxLength(it, CLOUD_USERNAME_MAX_LENGTH) },
+                        label = { Text("账号") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        supportingText = {
+                            LengthSupportingText(
+                                currentLength = username.length,
+                                maxLength = CLOUD_USERNAME_MAX_LENGTH,
+                                requirementText = rangeLengthHint(
+                                    CLOUD_USERNAME_MIN_LENGTH,
+                                    CLOUD_USERNAME_MAX_LENGTH,
+                                ),
+                            )
+                        },
+                    )
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = clampToMaxLength(it, CLOUD_PASSWORD_MAX_LENGTH) },
+                        label = { Text("密码") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        supportingText = {
+                            LengthSupportingText(
+                                currentLength = password.length,
+                                maxLength = CLOUD_PASSWORD_MAX_LENGTH,
+                                requirementText = rangeLengthHint(
+                                    CLOUD_PASSWORD_MIN_LENGTH,
+                                    CLOUD_PASSWORD_MAX_LENGTH,
+                                ),
+                            )
+                        },
+                    )
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !cloudState.isSubmitting,
+                        onClick = {
+                            if (mode == CloudAuthMode.LOGIN) {
+                                onLogin(username, password) { result ->
+                                    result.onSuccess { onEnterApp() }
+                                    result.onFailure { toast(context, it.message ?: "登录失败") }
+                                }
+                            } else {
+                                onRegister(username, password, displayName) { result ->
+                                    result.onSuccess { onEnterApp() }
+                                    result.onFailure { toast(context, it.message ?: "注册失败") }
+                                }
+                            }
+                        },
+                    ) {
+                        if (cloudState.isSubmitting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.width(18.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                            )
+                        } else {
+                            Text(if (mode == CloudAuthMode.LOGIN) "登录并拉取账本" else "注册并初始化账本")
                         }
+                    }
+                    OutlinedButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = {
+                            onUseLocalMode { result ->
+                                result.onSuccess {
+                                    toast(context, "已进入本地模式")
+                                    onEnterApp()
+                                }
+                                result.onFailure { toast(context, it.message ?: "进入本地模式失败") }
+                            }
+                        },
+                    ) {
+                        Text("暂用本地模式")
                     }
                 }
             }
@@ -1735,119 +2268,201 @@ private fun AddTransactionSheet(
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text(
-                text = if (editingTransaction == null) "记一笔" else "编辑交易",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-            )
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                listOf(TransactionType.EXPENSE to "支出", TransactionType.INCOME to "收入").forEachIndexed { index, item ->
-                    SegmentedButton(
-                        selected = type == item.first,
-                        onClick = { type = item.first },
-                        shape = androidx.compose.material3.SegmentedButtonDefaults.itemShape(index = index, count = 2),
-                    ) {
-                        Text(item.second)
+            StackedSurfaceCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(340.dp),
+            ) {
+                Text(
+                    text = if (editingTransaction == null) "记一笔" else "编辑交易",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Black,
+                )
+                Text(
+                    text = "选择类型",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    listOf(TransactionType.EXPENSE to "支出", TransactionType.INCOME to "收入").forEach { item ->
+                        Button(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(72.dp),
+                            onClick = { type = item.first },
+                            shape = RoundedCornerShape(24.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (type == item.first) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceVariant
+                                },
+                                contentColor = if (type == item.first) {
+                                    MaterialTheme.colorScheme.onPrimary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
+                            ),
+                        ) {
+                            Text(
+                                text = item.second,
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
                     }
                 }
+                OutlinedTextField(
+                    value = amountText,
+                    onValueChange = { amountText = it },
+                    label = { Text("金额") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(24.dp),
+                    singleLine = true,
+                    prefix = { Text("¥", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
+                    textStyle = MaterialTheme.typography.displaySmall,
+                )
+                QuickChipRow(
+                    title = "快捷金额",
+                    values = quickAmounts,
+                    onClick = { amountText = it },
+                )
             }
-            OutlinedTextField(
-                value = amountText,
-                onValueChange = { amountText = it },
-                label = { Text("金额") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                prefix = { Text("¥", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
-                textStyle = MaterialTheme.typography.headlineSmall,
-            )
-            QuickChipRow(
-                title = "快捷金额",
-                values = quickAmounts,
-                onClick = { amountText = it },
-            )
-            DateTimeSelectorRow(
-                dateText = selectedDateTime.toLocalDate().format(DateTimeFormatter.ofPattern("yyyy-MM-dd")),
-                timeText = selectedDateTime.toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm")),
-                onDateClick = {
-                    DatePickerDialog(
-                        context,
-                        { _, year, month, dayOfMonth ->
-                            occurredAtTouched = true
-                            val localDateTime = LocalDateTime.of(
-                                LocalDate.of(year, month + 1, dayOfMonth),
-                                selectedDateTime.toLocalTime(),
-                            )
-                            occurredAtEpochMillis = localDateTime.atZone(zoneId).toInstant().toEpochMilli()
+
+            Card(
+                shape = RoundedCornerShape(28.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Text(
+                        text = "账目信息",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Black,
+                    )
+                    DateTimeSelectorRow(
+                        dateText = selectedDateTime.toLocalDate().format(DateTimeFormatter.ofPattern("yyyy-MM-dd")),
+                        timeText = selectedDateTime.toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm")),
+                        onDateClick = {
+                            DatePickerDialog(
+                                context,
+                                { _, year, month, dayOfMonth ->
+                                    occurredAtTouched = true
+                                    val localDateTime = LocalDateTime.of(
+                                        LocalDate.of(year, month + 1, dayOfMonth),
+                                        selectedDateTime.toLocalTime(),
+                                    )
+                                    occurredAtEpochMillis = localDateTime.atZone(zoneId).toInstant().toEpochMilli()
+                                },
+                                selectedDateTime.year,
+                                selectedDateTime.monthValue - 1,
+                                selectedDateTime.dayOfMonth,
+                            ).show()
                         },
-                        selectedDateTime.year,
-                        selectedDateTime.monthValue - 1,
-                        selectedDateTime.dayOfMonth,
-                    ).show()
-                },
-                onTimeClick = {
-                    TimePickerDialog(
-                        context,
-                        { _, hourOfDay, minute ->
-                            occurredAtTouched = true
-                            val localDateTime = LocalDateTime.of(
-                                selectedDateTime.toLocalDate(),
-                                LocalTime.of(hourOfDay, minute),
-                            )
-                            occurredAtEpochMillis = localDateTime.atZone(zoneId).toInstant().toEpochMilli()
+                        onTimeClick = {
+                            TimePickerDialog(
+                                context,
+                                { _, hourOfDay, minute ->
+                                    occurredAtTouched = true
+                                    val localDateTime = LocalDateTime.of(
+                                        selectedDateTime.toLocalDate(),
+                                        LocalTime.of(hourOfDay, minute),
+                                    )
+                                    occurredAtEpochMillis = localDateTime.atZone(zoneId).toInstant().toEpochMilli()
+                                },
+                                selectedDateTime.hour,
+                                selectedDateTime.minute,
+                                true,
+                            ).show()
                         },
-                        selectedDateTime.hour,
-                        selectedDateTime.minute,
-                        true,
-                    ).show()
-                },
-                onResetNow = {
-                    occurredAtTouched = true
-                    occurredAtEpochMillis = Instant.now().toEpochMilli()
-                },
-            )
-            LabeledDropdown(
-                label = "成员",
-                options = state.members,
-                selectedId = selectedMemberId,
-                optionLabel = { it.name },
-                optionId = { it.id },
-                onSelected = { selectedMemberId = it.id },
-            )
-            LabeledDropdown(
-                label = "账户",
-                options = state.accounts,
-                selectedId = selectedAccountId,
-                optionLabel = { it.name },
-                optionId = { it.id },
-                onSelected = { selectedAccountId = it.id },
-            )
-            LabeledDropdown(
-                label = "分类",
-                options = categories,
-                selectedId = selectedCategoryId,
-                optionLabel = { it.name },
-                optionId = { it.id },
-                onSelected = { selectedCategoryId = it.id },
-            )
-            OutlinedTextField(
-                value = note,
-                onValueChange = { note = it },
-                label = { Text("备注") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-            )
-            QuickChipRow(
-                title = "常用备注",
-                values = quickNotes,
-                onClick = { note = it },
-            )
+                        onResetNow = {
+                            occurredAtTouched = true
+                            occurredAtEpochMillis = Instant.now().toEpochMilli()
+                        },
+                    )
+                    LabeledDropdown(
+                        label = "成员",
+                        options = state.members,
+                        selectedId = selectedMemberId,
+                        optionLabel = { it.name },
+                        optionId = { it.id },
+                        onSelected = { selectedMemberId = it.id },
+                    )
+                    LabeledDropdown(
+                        label = "账户",
+                        options = state.accounts,
+                        selectedId = selectedAccountId,
+                        optionLabel = { it.name },
+                        optionId = { it.id },
+                        onSelected = { selectedAccountId = it.id },
+                    )
+                    LabeledDropdown(
+                        label = "分类",
+                        options = categories,
+                        selectedId = selectedCategoryId,
+                        optionLabel = { it.name },
+                        optionId = { it.id },
+                        onSelected = { selectedCategoryId = it.id },
+                    )
+                }
+            }
+
+            Card(
+                shape = RoundedCornerShape(28.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Text(
+                        text = "备注",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Black,
+                    )
+                    OutlinedTextField(
+                        value = note,
+                        onValueChange = { note = it },
+                        label = { Text("备注") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(24.dp),
+                        singleLine = true,
+                    )
+                    QuickChipRow(
+                        title = "常用备注",
+                        values = quickNotes,
+                        onClick = { note = it },
+                    )
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                OutlinedButton(modifier = Modifier.weight(1f), onClick = onDismiss) { Text("返回") }
+                OutlinedButton(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(60.dp),
+                    shape = RoundedCornerShape(22.dp),
+                    onClick = onDismiss,
+                ) { Text("返回") }
                 Button(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(60.dp),
+                    shape = RoundedCornerShape(22.dp),
                     onClick = {
                         val amount = amountText.toDoubleOrNull() ?: return@Button
                         val memberId = selectedMemberId ?: return@Button
@@ -1887,29 +2502,88 @@ private fun DateTimeSelectorRow(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             text = "日期时间",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        DateTimeActionButton(
+            label = "日期",
+            value = dateText,
+            onClick = onDateClick,
+        )
+        DateTimeActionButton(
+            label = "时间",
+            value = timeText,
+            onClick = onTimeClick,
+        )
+        OutlinedButton(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
+            shape = RoundedCornerShape(20.dp),
+            onClick = onResetNow,
+        ) {
+            Text("恢复到当前时间", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
+private fun DateTimeActionButton(
+    label: String,
+    value: String,
+    onClick: () -> Unit,
+) {
+    OutlinedButton(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(60.dp),
+        shape = RoundedCornerShape(22.dp),
+        onClick = onClick,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun LengthSupportingText(
+    currentLength: Int,
+    maxLength: Int?,
+    requirementText: String? = null,
+) {
+    if (maxLength == null && requirementText.isNullOrBlank()) return
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = requirementText.orEmpty(),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedButton(
-                modifier = Modifier.weight(1f),
-                onClick = onDateClick,
-            ) {
-                Text(dateText)
-            }
-            OutlinedButton(
-                modifier = Modifier.weight(1f),
-                onClick = onTimeClick,
-            ) {
-                Text(timeText)
-            }
-            TextButton(onClick = onResetNow) {
-                Text("现在")
-            }
+        if (maxLength != null) {
+            Text(
+                text = "$currentLength/$maxLength",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -1920,6 +2594,8 @@ private fun SimpleInputSheet(
     title: String,
     fieldLabel: String,
     initialValue: String = "",
+    maxLength: Int? = null,
+    requirementText: String? = null,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
@@ -1940,10 +2616,19 @@ private fun SimpleInputSheet(
             Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             OutlinedTextField(
                 value = text,
-                onValueChange = { text = it },
+                onValueChange = { next ->
+                    text = maxLength?.let { clampToMaxLength(next, it) } ?: next
+                },
                 label = { Text(fieldLabel) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
+                supportingText = {
+                    LengthSupportingText(
+                        currentLength = text.length,
+                        maxLength = maxLength,
+                        requirementText = requirementText,
+                    )
+                },
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -2002,10 +2687,17 @@ private fun AccountInputSheet(
             Text("新增账户", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             OutlinedTextField(
                 value = name,
-                onValueChange = { name = it },
+                onValueChange = { name = clampToMaxLength(it, ENTITY_NAME_MAX_LENGTH) },
                 label = { Text("账户名称") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
+                supportingText = {
+                    LengthSupportingText(
+                        currentLength = name.length,
+                        maxLength = ENTITY_NAME_MAX_LENGTH,
+                        requirementText = maxLengthHint(ENTITY_NAME_MAX_LENGTH),
+                    )
+                },
             )
             OutlinedTextField(
                 value = initialBalance,
@@ -2067,10 +2759,17 @@ private fun CategoryInputSheet(
             }
             OutlinedTextField(
                 value = name,
-                onValueChange = { name = it },
+                onValueChange = { name = clampToMaxLength(it, ENTITY_NAME_MAX_LENGTH) },
                 label = { Text("分类名称") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
+                supportingText = {
+                    LengthSupportingText(
+                        currentLength = name.length,
+                        maxLength = ENTITY_NAME_MAX_LENGTH,
+                        requirementText = maxLengthHint(ENTITY_NAME_MAX_LENGTH),
+                    )
+                },
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -2262,6 +2961,7 @@ private fun <T> LabeledDropdown(
             readOnly = true,
             label = { Text(label) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            shape = RoundedCornerShape(24.dp),
             modifier = Modifier
                 .menuAnchor()
                 .fillMaxWidth(),
@@ -2317,6 +3017,7 @@ private fun ActionCard(
 
 @Composable
 private fun HeroDashboardCard(
+    modifier: Modifier = Modifier,
     bookName: String,
     income: String,
     expense: String,
@@ -2325,81 +3026,321 @@ private fun HeroDashboardCard(
     onOpenNaturalLanguage: () -> Unit,
 ) {
     Card(
+        modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(32.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxSize()
                 .background(
-                    brush = Brush.linearGradient(
+                    brush = Brush.verticalGradient(
                         listOf(
-                            MaterialTheme.colorScheme.primary,
-                            MaterialTheme.colorScheme.tertiary,
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.06f),
+                            Color.Transparent,
                         ),
                     ),
                 ),
         ) {
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(22.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                    .fillMaxSize()
+                    .padding(horizontal = 4.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
-                Text(
-                    text = bookName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f),
-                )
-                Text(
-                    text = balance,
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Black,
-                    color = MaterialTheme.colorScheme.onPrimary,
-                )
-                Text(
-                    text = "本月结余",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f),
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.TopCenter,
                 ) {
-                    Button(
-                        modifier = Modifier.weight(1f),
-                        onClick = onOpenNaturalLanguage,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.secondary,
-                            contentColor = MaterialTheme.colorScheme.onSecondary,
-                        ),
+                    WalletBackdropCard(
+                        modifier = Modifier
+                            .fillMaxWidth(0.94f)
+                            .fillMaxHeight(0.88f)
+                            .offset(y = 28.dp),
+                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                    )
+                    WalletBackdropCard(
+                        modifier = Modifier
+                            .fillMaxWidth(0.97f)
+                            .fillMaxHeight(0.90f)
+                            .offset(y = 14.dp),
+                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.28f),
+                    )
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .fillMaxHeight(0.90f),
+                        shape = RoundedCornerShape(30.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary),
                     ) {
-                        Text("一句话记账")
-                    }
-                    OutlinedButton(
-                        modifier = Modifier.weight(1f),
-                        onClick = onRecord,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.35f)),
-                    ) {
-                        Text("记一笔", color = MaterialTheme.colorScheme.onPrimary)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    brush = Brush.linearGradient(
+                                        listOf(
+                                            MaterialTheme.colorScheme.primary,
+                                            MaterialTheme.colorScheme.tertiary,
+                                        ),
+                                    ),
+                                ),
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 24.dp, vertical = 22.dp),
+                                verticalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(
+                                        text = bookName,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.84f),
+                                    )
+                                    Text(
+                                        text = "本月结余",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.92f),
+                                    )
+                                }
+                                MoneyAmountText(
+                                    value = balance,
+                                    prominent = true,
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    HomeMetricBadge(
+                                        modifier = Modifier.weight(1f),
+                                        label = "收入",
+                                        value = income,
+                                    )
+                                    HomeMetricBadge(
+                                        modifier = Modifier.weight(1f),
+                                        label = "支出",
+                                        value = expense,
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
-                Row(
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    DarkMetricCard(
-                        modifier = Modifier.weight(1f),
-                        label = "收入",
-                        value = income,
-                    )
-                    DarkMetricCard(
-                        modifier = Modifier.weight(1f),
-                        label = "支出",
-                        value = expense,
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(104.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        HomeShortcutTile(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .height(104.dp),
+                            label = "一句话记账",
+                            subtitle = "自然输入",
+                            onClick = onOpenNaturalLanguage,
+                        )
+                        HomeShortcutTile(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .height(104.dp),
+                            label = "记一笔",
+                            subtitle = "手动录入",
+                            onClick = onRecord,
+                        )
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(104.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        HomeSummaryTile(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .height(104.dp),
+                            label = "收入",
+                            value = income,
+                        )
+                        HomeSummaryTile(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .height(104.dp),
+                            label = "支出",
+                            value = expense,
+                        )
+                    }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun WalletBackdropCard(
+    modifier: Modifier = Modifier,
+    containerColor: Color,
+) {
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(30.dp),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+    ) {}
+}
+
+@Composable
+private fun StackedSurfaceCard(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Box(modifier = modifier) {
+        WalletBackdropCard(
+            modifier = Modifier
+                .fillMaxWidth(0.94f)
+                .fillMaxHeight(0.90f)
+                .align(Alignment.TopCenter)
+                .offset(y = 24.dp),
+            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+        )
+        WalletBackdropCard(
+            modifier = Modifier
+                .fillMaxWidth(0.97f)
+                .fillMaxHeight(0.92f)
+                .align(Alignment.TopCenter)
+                .offset(y = 12.dp),
+            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+        )
+        Card(
+            modifier = Modifier
+                .fillMaxSize()
+                .align(Alignment.TopCenter),
+            shape = RoundedCornerShape(28.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                content = content,
+            )
+        }
+    }
+}
+
+@Composable
+private fun HomeMetricBadge(
+    modifier: Modifier = Modifier,
+    label: String,
+    value: String,
+) {
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.14f)),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.82f),
+            )
+            MoneyAmountText(
+                value = value,
+                prominent = false,
+                color = MaterialTheme.colorScheme.onPrimary,
+            )
+        }
+    }
+}
+
+@Composable
+private fun HomeShortcutTile(
+    modifier: Modifier = Modifier,
+    label: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Button(
+        modifier = modifier,
+        onClick = onClick,
+        shape = RoundedCornerShape(24.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+        ),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalAlignment = Alignment.Start,
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun HomeSummaryTile(
+    modifier: Modifier = Modifier,
+    label: String,
+    value: String,
+) {
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            MoneyAmountText(
+                value = value,
+                prominent = false,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
         }
     }
 }
@@ -2411,12 +3352,15 @@ fun NaturalLanguageEntryScreen(
     onBack: () -> Unit,
     onAddTransaction: (TransactionType, Double, Long, Long, Long, Instant, String) -> Unit,
     onParse: (String) -> NaturalLanguageParseResult,
+    onCloudParse: (String, (Result<NaturalLanguageParseResult>) -> Unit) -> Unit,
+    canUseCloudParse: Boolean,
     onSave: (String, Long, List<ParsedTransactionCandidate>, (Result<Unit>) -> Unit) -> Unit,
 ) {
     var rawText by rememberSaveable { mutableStateOf("") }
     var parseResult by remember { mutableStateOf<NaturalLanguageParseResult?>(null) }
     var selectedAccountId by rememberSaveable { mutableStateOf<Long?>(null) }
     var showDirectSheet by rememberSaveable { mutableStateOf(false) }
+    var isCloudParsing by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
     val recentMemberName = remember(state.members, state.recentMemberId) {
         state.members.firstOrNull { it.id == state.recentMemberId }?.name.orEmpty()
@@ -2453,59 +3397,139 @@ fun NaturalLanguageEntryScreen(
     }
 
     ScreenContainer(contentPadding = contentPadding) {
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            item {
+        if (parseResult == null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 SectionHeader("记账", action = "首页", onAction = onBack)
-            }
-            item {
-                Card(
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                StackedSurfaceCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
                 ) {
-                    Column(
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        HeroActionButton(
+                            modifier = Modifier.weight(1f),
+                            label = "一句话",
+                            emphasized = true,
+                            compact = true,
+                            onClick = {},
+                        )
+                        HeroActionButton(
+                            modifier = Modifier.weight(1f),
+                            label = "直接记一笔",
+                            emphasized = false,
+                            compact = true,
+                            onClick = { showDirectSheet = true },
+                        )
+                    }
+                    Text(
+                        text = "一句话记账",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    NaturalLanguageRawTextField(
+                        rawText = rawText,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                            .weight(1f),
+                        onValueChange = {
+                            rawText = it
+                            parseResult = null
+                        },
+                    )
+                    LabeledDropdown(
+                        label = "账户",
+                        options = state.accounts,
+                        selectedId = selectedAccountId,
+                        optionLabel = { it.name },
+                        optionId = { it.id },
+                        onSelected = { selectedAccountId = it.id },
+                    )
+                    ParseActionRow(
+                        canUseCloudParse = canUseCloudParse,
+                        isCloudParsing = isCloudParsing,
+                        onLocalParse = {
+                            parseResult = onParse(rawText)
+                        },
+                        onCloudParse = {
+                            isCloudParsing = true
+                            onCloudParse(rawText) { result ->
+                                isCloudParsing = false
+                                result.onSuccess { parseResult = it }
+                                    .onFailure { toast(context, it.message ?: "智能解析失败") }
+                            }
+                        },
+                        onClear = {
+                            rawText = ""
+                            parseResult = null
+                        },
+                    )
+                    if (!canUseCloudParse) {
+                        Text(
+                            text = "登录云端后可用智能解析",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        } else {
+            val result = requireNotNull(parseResult)
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                item {
+                    SectionHeader("记账", action = "首页", onAction = onBack)
+                }
+                item {
+                    StackedSurfaceCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .fillParentMaxHeight(0.68f),
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            Button(
+                            HeroActionButton(
                                 modifier = Modifier.weight(1f),
+                                label = "一句话",
+                                emphasized = true,
+                                compact = true,
                                 onClick = {},
-                            ) {
-                                Text("一句话")
-                            }
-                            OutlinedButton(
+                            )
+                            HeroActionButton(
                                 modifier = Modifier.weight(1f),
+                                label = "直接记一笔",
+                                emphasized = false,
+                                compact = true,
                                 onClick = { showDirectSheet = true },
-                            ) {
-                                Text("直接记一笔")
-                            }
+                            )
                         }
                         Text(
                             text = "一句话记账",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                         )
-                        OutlinedTextField(
-                            value = rawText,
+                        NaturalLanguageRawTextField(
+                            rawText = rawText,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
                             onValueChange = {
                                 rawText = it
                                 parseResult = null
                             },
-                            placeholder = { Text("例如：昨天买菜 86，今天打车 30") },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(156.dp),
                         )
                         LabeledDropdown(
                             label = "账户",
@@ -2515,24 +3539,37 @@ fun NaturalLanguageEntryScreen(
                             optionId = { it.id },
                             onSelected = { selectedAccountId = it.id },
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Button(
-                                modifier = Modifier.weight(1f),
-                                onClick = { parseResult = onParse(rawText) },
-                            ) {
-                                Text("开始解析")
-                            }
-                            OutlinedButton(
-                                modifier = Modifier.weight(1f),
-                                onClick = { rawText = "" },
-                            ) {
-                                Text("清空")
-                            }
+                        ParseActionRow(
+                            canUseCloudParse = canUseCloudParse,
+                            isCloudParsing = isCloudParsing,
+                            onLocalParse = {
+                                parseResult = onParse(rawText)
+                            },
+                            onCloudParse = {
+                                isCloudParsing = true
+                                onCloudParse(rawText) { result ->
+                                    isCloudParsing = false
+                                    result.onSuccess { parseResult = it }
+                                        .onFailure { toast(context, it.message ?: "智能解析失败") }
+                                }
+                            },
+                            onClear = {
+                                rawText = ""
+                                parseResult = null
+                            },
+                        )
+                        if (!canUseCloudParse) {
+                            Text(
+                                text = "登录云端后可用智能解析",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 }
-            }
-            parseResult?.let { result ->
+                item {
+                    ParseResultStatusCard(result = result)
+                }
                 item {
                     if (result.warnings.isNotEmpty()) {
                         EmptyCard(result.warnings.joinToString("\n"))
@@ -2630,6 +3667,90 @@ fun NaturalLanguageEntryScreen(
 }
 
 @Composable
+private fun NaturalLanguageRawTextField(
+    rawText: String,
+    modifier: Modifier = Modifier,
+    onValueChange: (String) -> Unit,
+) {
+    OutlinedTextField(
+        value = rawText,
+        onValueChange = { onValueChange(clampToMaxLength(it, NLP_RAW_TEXT_MAX_LENGTH)) },
+        placeholder = { Text("例如：昨天买菜 86，今天打车 30") },
+        modifier = modifier,
+        shape = RoundedCornerShape(24.dp),
+        supportingText = {
+            LengthSupportingText(
+                currentLength = rawText.length,
+                maxLength = NLP_RAW_TEXT_MAX_LENGTH,
+                requirementText = maxLengthHint(NLP_RAW_TEXT_MAX_LENGTH),
+            )
+        },
+    )
+}
+
+@Composable
+private fun ParseActionRow(
+    canUseCloudParse: Boolean,
+    isCloudParsing: Boolean,
+    onLocalParse: () -> Unit,
+    onCloudParse: () -> Unit,
+    onClear: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Button(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(56.dp),
+                shape = RoundedCornerShape(20.dp),
+                onClick = onLocalParse,
+            ) {
+                Text("快速解析")
+            }
+            Button(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(56.dp),
+                shape = RoundedCornerShape(20.dp),
+                enabled = canUseCloudParse && !isCloudParsing,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                ),
+                onClick = onCloudParse,
+            ) {
+                if (isCloudParsing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.width(18.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                } else {
+                    Text("智能解析")
+                }
+            }
+        }
+        OutlinedButton(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
+            shape = RoundedCornerShape(18.dp),
+            onClick = onClear,
+        ) {
+            Text("清空")
+        }
+    }
+}
+
+@Composable
 private fun EditableParsedCandidateCard(
     draft: EditableParsedCandidate,
     members: List<MemberEntity>,
@@ -2649,6 +3770,20 @@ private fun EditableParsedCandidateCard(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ConfidencePill(confidence = draft.confidence)
+                Text(
+                    text = draft.sourceSnippet,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -2694,6 +3829,7 @@ private fun EditableParsedCandidateCard(
                 onValueChange = { onUpdate(draft.copy(amountText = it)) },
                 label = { Text("金额") },
                 modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(22.dp),
                 singleLine = true,
             )
             OutlinedTextField(
@@ -2702,6 +3838,7 @@ private fun EditableParsedCandidateCard(
                 label = { Text("日期") },
                 placeholder = { Text("YYYY-MM-DD") },
                 modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(22.dp),
                 singleLine = true,
             )
             LabeledDropdown(
@@ -2725,8 +3862,93 @@ private fun EditableParsedCandidateCard(
                 onValueChange = { onUpdate(draft.copy(note = it)) },
                 label = { Text("备注") },
                 modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(22.dp),
             )
         }
+    }
+}
+
+@Composable
+private fun ParseResultStatusCard(
+    result: NaturalLanguageParseResult,
+) {
+    val averageConfidence = remember(result.candidates) {
+        if (result.candidates.isEmpty()) 0f
+        else result.candidates.map { it.confidence }.average().toFloat()
+    }
+    val modeLabel = if (result.parseMode == ParseMode.CLOUD) "智能解析" else "快速解析"
+    val sourceLabel = result.providerLabel ?: if (result.parseMode == ParseMode.CLOUD) "云端模型" else "本地规则"
+
+    Card(
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = modeLabel,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = sourceLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                ConfidencePill(confidence = averageConfidence)
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                MiniMetricCard(
+                    modifier = Modifier.weight(1f),
+                    label = "候选",
+                    value = "${result.candidates.size} 条",
+                )
+                MiniMetricCard(
+                    modifier = Modifier.weight(1f),
+                    label = "原文",
+                    value = if (result.diaryText.length > 10) "${result.diaryText.length} 字" else result.diaryText.ifBlank { "0 字" },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConfidencePill(confidence: Float) {
+    val percentage = (confidence * 100).toInt().coerceIn(0, 99)
+    val label = when {
+        percentage >= 80 -> "高"
+        percentage >= 60 -> "中"
+        else -> "低"
+    }
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        ),
+    ) {
+        Text(
+            text = "识别$label · $percentage%",
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 
@@ -2802,7 +4024,12 @@ private fun QuickChipRow(
     onClick: (String) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -2810,14 +4037,13 @@ private fun QuickChipRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             values.forEach { value ->
-                AssistChip(
+                OutlinedButton(
                     onClick = { onClick(value) },
-                    colors = AssistChipDefaults.assistChipColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        labelColor = MaterialTheme.colorScheme.onSurface,
-                    ),
-                    label = { Text(value) },
-                )
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier.height(44.dp),
+                ) {
+                    Text(value, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                }
             }
         }
     }
@@ -2941,47 +4167,86 @@ private fun TransactionCard(
     onDelete: () -> Unit,
 ) {
     val formatter = remember { DateTimeFormatter.ofPattern("MM-dd HH:mm") }
+    val accentBrush = if (transaction.type == TransactionType.INCOME) {
+        Brush.linearGradient(listOf(MaterialTheme.colorScheme.secondary, MaterialTheme.colorScheme.tertiary))
+    } else {
+        Brush.linearGradient(listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary))
+    }
     Card(
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(transaction.categoryName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text(
-                    text = if (transaction.type == TransactionType.INCOME) {
-                        "+${formatCurrency(transaction.amount)}"
-                    } else {
-                        "-${formatCurrency(transaction.amount)}"
-                    },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = if (transaction.type == TransactionType.INCOME) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                )
+                Box(
+                    modifier = Modifier
+                        .width(52.dp)
+                        .height(52.dp)
+                        .background(accentBrush, RoundedCornerShape(16.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = if (transaction.type == TransactionType.INCOME) "入" else "支",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Black,
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(transaction.categoryName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "${transaction.memberName} · ${transaction.accountName}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = if (transaction.type == TransactionType.INCOME) {
+                            "+${formatCurrency(transaction.amount)}"
+                        } else {
+                            "-${formatCurrency(transaction.amount)}"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (transaction.type == TransactionType.INCOME) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    )
+                    Text(
+                        transaction.occurredAt.atZone(ZoneId.systemDefault()).format(formatter),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             Text(
-                "${transaction.memberName} · ${transaction.accountName}",
+                transaction.note.ifBlank { "暂无备注" },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.End,
             ) {
-                Text(transaction.occurredAt.atZone(ZoneId.systemDefault()).format(formatter), style = MaterialTheme.typography.bodySmall)
-                Text(transaction.note.ifBlank { "无备注" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onEdit) { Text("编辑") }
                 TextButton(onClick = onDelete) { Text("删除") }
+                }
             }
         }
     }
@@ -3145,7 +4410,7 @@ private fun SimpleRow(label: String, value: String) {
 
 private fun formatCurrency(value: Double): String {
     val normalized = value.absoluteValue
-    return "¥%.2f".format(normalized)
+    return "¥${DecimalFormat("#,##0.00").format(normalized)}"
 }
 
 private fun formatSignedCurrency(value: Double): String {

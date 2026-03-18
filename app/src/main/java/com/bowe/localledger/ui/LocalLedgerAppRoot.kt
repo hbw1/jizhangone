@@ -93,6 +93,7 @@ fun LocalLedgerAppRoot() {
             repository = app.repository,
             cloudAuthRepository = app.cloudAuthRepository,
             cloudSyncRepository = app.cloudSyncRepository,
+            cloudNlpRepository = app.cloudNlpRepository,
             remoteLedgerDataSource = app.remoteDataSource,
         ),
     )
@@ -114,6 +115,8 @@ fun LocalLedgerAppRoot() {
     val cloudUiState by viewModel.cloudUiState.collectAsStateWithLifecycle()
     val startupDestination by viewModel.startupDestination.collectAsStateWithLifecycle()
     val canGoBackFromCloud = books.isNotEmpty() || cloudUiState.isAuthenticated
+    val canUseCloudNlp = cloudUiState.isAuthenticated &&
+        books.firstOrNull { it.id == currentBookId }?.remoteId?.isNotBlank() == true
     val selectedTopLevelRoute = when {
         currentRoute?.startsWith(TopLevelDestination.Settings.route) == true -> TopLevelDestination.Settings.route
         else -> currentRoute
@@ -228,6 +231,8 @@ fun LocalLedgerAppRoot() {
                         viewModel.addTransaction(type, amount, memberId, accountId, categoryId, occurredAt, note)
                     },
                     onParse = viewModel::parseNaturalLanguage,
+                    onCloudParse = viewModel::parseNaturalLanguageWithCloud,
+                    canUseCloudParse = canUseCloudNlp,
                     onSave = viewModel::saveNaturalLanguageEntry,
                 )
             }
@@ -363,6 +368,16 @@ fun LocalLedgerAppRoot() {
                     },
                     onRegister = { username, password, displayName, onResult ->
                         viewModel.registerToCloud(username, password, displayName, onResult)
+                    },
+                    onLogout = { onResult ->
+                        viewModel.logoutCloud { result ->
+                            result.onSuccess {
+                                navController.navigate(CloudAuthRoute) {
+                                    launchSingleTop = true
+                                }
+                            }
+                            onResult(result)
+                        }
                     },
                 )
             }

@@ -26,9 +26,16 @@ import com.bowe.localledger.data.nlp.ParsedTransactionCandidate
 import com.bowe.localledger.data.nlp.PlaceholderNaturalLanguageLedgerParser
 import com.bowe.localledger.data.remote.CloudAuthRepository
 import com.bowe.localledger.data.remote.CloudBook
+import com.bowe.localledger.data.remote.CloudNlpRepository
 import com.bowe.localledger.data.remote.CloudSession
 import com.bowe.localledger.data.remote.CloudSyncRepository
+import com.bowe.localledger.data.remote.BOOK_NAME_MAX_LENGTH
+import com.bowe.localledger.data.remote.ENTITY_NAME_MAX_LENGTH
+import com.bowe.localledger.data.remote.NLP_RAW_TEXT_MAX_LENGTH
 import com.bowe.localledger.data.remote.RemoteLedgerDataSource
+import com.bowe.localledger.data.remote.normalizeBoundedText
+import com.bowe.localledger.data.remote.validateCloudLoginInput
+import com.bowe.localledger.data.remote.validateCloudRegisterInput
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -41,12 +48,14 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppViewModel(
     private val repository: LedgerRepository,
     private val cloudAuthRepository: CloudAuthRepository,
     private val cloudSyncRepository: CloudSyncRepository,
+    private val cloudNlpRepository: CloudNlpRepository,
     private val remoteLedgerDataSource: RemoteLedgerDataSource,
 ) : ViewModel() {
     private val naturalLanguageParser = PlaceholderNaturalLanguageLedgerParser()
@@ -147,11 +156,19 @@ class AppViewModel(
             val hasSavedSession = cloudAuthRepository.hasSavedSession()
             val hasAnyBooks = repository.hasAnyBooks()
             cloudState.value = cloudState.value.copy(
-                isCheckingSession = false,
+                isCheckingSession = hasSavedSession,
                 serverBaseUrl = baseUrl,
                 hasSavedSession = hasSavedSession,
             )
-            startupDestinationState.value = if (hasAnyBooks) StartupDestination.APP else StartupDestination.AUTH
+            startupDestinationState.value = when {
+                hasSavedSession -> {
+                    val restored = restoreCloudSession()
+                    if (restored || repository.hasAnyBooks()) StartupDestination.APP else StartupDestination.AUTH
+                }
+
+                hasAnyBooks -> StartupDestination.APP
+                else -> StartupDestination.AUTH
+            }
         }
     }
 
@@ -242,15 +259,47 @@ class AppViewModel(
 
     fun parseNaturalLanguage(text: String): NaturalLanguageParseResult {
         val bookId = currentBookId.value ?: 0L
+        val boundedText = text.take(NLP_RAW_TEXT_MAX_LENGTH)
         return naturalLanguageParser.parse(
             NaturalLanguageParseRequest(
                 bookId = bookId,
-                rawText = text,
+                rawText = boundedText,
                 memberNames = members.value.map { it.name },
                 expenseCategoryNames = expenseCategories.value.map { it.name },
                 incomeCategoryNames = incomeCategories.value.map { it.name },
             ),
         )
+    }
+
+    fun parseNaturalLanguageWithCloud(
+        text: String,
+        onResult: (Result<NaturalLanguageParseResult>) -> Unit,
+    ) {
+        val boundedText = text.take(NLP_RAW_TEXT_MAX_LENGTH)
+        if (boundedText.isBlank()) {
+            onResult(Result.failure(IllegalArgumentException("请输入要解析的内容")))
+            return
+        }
+        val currentBook = books.value.firstOrNull { it.id == currentBookId.value }
+        if (!cloudState.value.isAuthenticated) {
+            onResult(Result.failure(IllegalStateException("请先登录云端")))
+            return
+        }
+        val remoteBookId = currentBook?.remoteId
+        if (remoteBookId.isNullOrBlank()) {
+            onResult(Result.failure(IllegalStateException("当前账本还未同步到云端")))
+            return
+        }
+
+        viewModelScope.launch {
+            val result = cloudNlpRepository.parseNaturalLanguage(
+                remoteBookId = remoteBookId,
+                rawText = boundedText,
+                today = LocalDate.now(),
+                timezone = ZoneId.systemDefault().id,
+            )
+            onResult(result)
+        }
     }
 
     fun saveNaturalLanguageEntry(
@@ -260,11 +309,12 @@ class AppViewModel(
         onResult: (Result<Unit>) -> Unit,
     ) {
         val bookId = currentBookId.value ?: return
+        val boundedText = rawText.take(NLP_RAW_TEXT_MAX_LENGTH)
         viewModelScope.launch {
             val result = runCatching {
                 repository.saveNaturalLanguageEntry(
                     bookId = bookId,
-                    rawText = rawText,
+                    rawText = boundedText,
                     candidates = candidates,
                     memberNameToId = members.value.associate { it.name to it.id },
                     accountId = accountId,
@@ -279,40 +329,44 @@ class AppViewModel(
 
     fun addMember(name: String) {
         val bookId = currentBookId.value ?: return
-        if (name.isBlank()) return
+        val normalizedName = normalizeBoundedText(name, ENTITY_NAME_MAX_LENGTH)
+        if (normalizedName.isBlank()) return
         viewModelScope.launch {
-            repository.addMember(bookId, name)
+            repository.addMember(bookId, normalizedName)
             triggerCloudSync()
         }
     }
 
     fun addAccount(name: String, initialBalance: Double) {
         val bookId = currentBookId.value ?: return
-        if (name.isBlank()) return
+        val normalizedName = normalizeBoundedText(name, ENTITY_NAME_MAX_LENGTH)
+        if (normalizedName.isBlank()) return
         viewModelScope.launch {
-            repository.addAccount(bookId, name, initialBalance)
+            repository.addAccount(bookId, normalizedName, initialBalance)
             triggerCloudSync()
         }
     }
 
     fun addCategory(type: TransactionType, name: String) {
         val bookId = currentBookId.value ?: return
-        if (name.isBlank()) return
+        val normalizedName = normalizeBoundedText(name, ENTITY_NAME_MAX_LENGTH)
+        if (normalizedName.isBlank()) return
         val nextSortOrder = if (type == TransactionType.EXPENSE) {
             expenseCategories.value.size + 1
         } else {
             incomeCategories.value.size + 1
         }
         viewModelScope.launch {
-            repository.addCategory(bookId, type, name, nextSortOrder)
+            repository.addCategory(bookId, type, normalizedName, nextSortOrder)
             triggerCloudSync()
         }
     }
 
     fun addBook(name: String) {
-        if (name.isBlank()) return
+        val normalizedName = normalizeBoundedText(name, BOOK_NAME_MAX_LENGTH)
+        if (normalizedName.isBlank()) return
         viewModelScope.launch {
-            val newBookId = repository.addBook(name)
+            val newBookId = repository.addBook(normalizedName)
             selectedBookId.value = newBookId
             triggerCloudSync()
         }
@@ -320,9 +374,10 @@ class AppViewModel(
 
     fun renameCurrentBook(name: String) {
         val currentBook = books.value.firstOrNull { it.id == currentBookId.value } ?: return
-        if (name.isBlank()) return
+        val normalizedName = normalizeBoundedText(name, BOOK_NAME_MAX_LENGTH)
+        if (normalizedName.isBlank()) return
         viewModelScope.launch {
-            repository.renameBook(currentBook, name)
+            repository.renameBook(currentBook, normalizedName)
             triggerCloudSync()
         }
     }
@@ -377,9 +432,10 @@ class AppViewModel(
     }
 
     fun renameMember(member: MemberEntity, name: String) {
-        if (name.isBlank()) return
+        val normalizedName = normalizeBoundedText(name, ENTITY_NAME_MAX_LENGTH)
+        if (normalizedName.isBlank()) return
         viewModelScope.launch {
-            repository.renameMember(member, name)
+            repository.renameMember(member, normalizedName)
             triggerCloudSync()
         }
     }
@@ -392,9 +448,10 @@ class AppViewModel(
     }
 
     fun renameAccount(account: AccountEntity, name: String) {
-        if (name.isBlank()) return
+        val normalizedName = normalizeBoundedText(name, ENTITY_NAME_MAX_LENGTH)
+        if (normalizedName.isBlank()) return
         viewModelScope.launch {
-            repository.renameAccount(account, name)
+            repository.renameAccount(account, normalizedName)
             triggerCloudSync()
         }
     }
@@ -407,9 +464,10 @@ class AppViewModel(
     }
 
     fun renameCategory(category: CategoryEntity, name: String) {
-        if (name.isBlank()) return
+        val normalizedName = normalizeBoundedText(name, ENTITY_NAME_MAX_LENGTH)
+        if (normalizedName.isBlank()) return
         viewModelScope.launch {
-            repository.renameCategory(category, name)
+            repository.renameCategory(category, normalizedName)
             triggerCloudSync()
         }
     }
@@ -426,8 +484,9 @@ class AppViewModel(
         password: String,
         onResult: (Result<Unit>) -> Unit,
     ) {
-        if (username.isBlank() || password.isBlank()) {
-            onResult(Result.failure(IllegalArgumentException("请输入账号和密码")))
+        val validationError = validateCloudLoginInput(username, password)
+        if (validationError != null) {
+            onResult(Result.failure(IllegalArgumentException(validationError)))
             return
         }
         viewModelScope.launch {
@@ -457,8 +516,9 @@ class AppViewModel(
         displayName: String,
         onResult: (Result<Unit>) -> Unit,
     ) {
-        if (username.isBlank() || password.isBlank() || displayName.isBlank()) {
-            onResult(Result.failure(IllegalArgumentException("请完整填写注册信息")))
+        val validationError = validateCloudRegisterInput(username, password, displayName)
+        if (validationError != null) {
+            onResult(Result.failure(IllegalArgumentException(validationError)))
             return
         }
         viewModelScope.launch {
@@ -535,8 +595,8 @@ class AppViewModel(
 
     fun resumeCloudSession(onResult: (Result<Unit>) -> Unit = {}) {
         viewModelScope.launch {
-            restoreCloudSession()
-            if (cloudState.value.isAuthenticated) {
+            val restored = restoreCloudSession()
+            if (restored) {
                 onResult(Result.success(Unit))
             } else {
                 onResult(Result.failure(IllegalStateException(cloudState.value.errorMessage ?: "云端连接失败")))
@@ -558,7 +618,7 @@ class AppViewModel(
         }
     }
 
-    private suspend fun restoreCloudSession() {
+    private suspend fun restoreCloudSession(): Boolean {
         cloudState.value = cloudState.value.copy(isCheckingSession = true, errorMessage = null)
         val result = cloudAuthRepository.restoreSession()
         result.onSuccess { session ->
@@ -568,20 +628,27 @@ class AppViewModel(
                     hasSavedSession = false,
                     serverBaseUrl = cloudState.value.serverBaseUrl,
                 )
+                return false
             } else {
                 applyCloudSession(session)
                 syncCloudBootstrap(session)
+                return true
             }
         }.onFailure { error ->
-            runCatching { cloudAuthRepository.logout() }
+            val shouldClearSession = error.message?.contains("已失效") == true
+            if (shouldClearSession) {
+                runCatching { cloudAuthRepository.logout() }
+            }
             cloudState.value = CloudUiState(
                 isCheckingSession = false,
                 isAuthenticated = false,
-                hasSavedSession = false,
+                hasSavedSession = !shouldClearSession,
                 errorMessage = error.message ?: "云端状态恢复失败",
                 serverBaseUrl = cloudState.value.serverBaseUrl,
             )
+            return false
         }
+        return false
     }
 
     private fun applyCloudSession(session: CloudSession) {
@@ -667,6 +734,7 @@ class AppViewModelFactory(
     private val repository: LedgerRepository,
     private val cloudAuthRepository: CloudAuthRepository,
     private val cloudSyncRepository: CloudSyncRepository,
+    private val cloudNlpRepository: CloudNlpRepository,
     private val remoteLedgerDataSource: RemoteLedgerDataSource,
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -676,6 +744,7 @@ class AppViewModelFactory(
                 repository,
                 cloudAuthRepository,
                 cloudSyncRepository,
+                cloudNlpRepository,
                 remoteLedgerDataSource,
             ) as T
         }
